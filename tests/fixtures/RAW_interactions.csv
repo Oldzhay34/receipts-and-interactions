@@ -1,0 +1,63 @@
+user_id,recipe_id,date,rating,review
+1001,101,2002-06-06,5,Excellent! Perfect as written.
+1001,102,2002-09-11,4,"Very good, the family liked it."
+1001,112,2002-12-17,5,Excellent! Perfect as written.
+1001,113,2003-03-24,4,"Very good, the family liked it."
+1001,114,2003-06-29,5,Excellent! Perfect as written.
+1001,120,2003-10-04,3,"Decent, would make again with changes."
+1002,101,2004-01-09,4,"Very good, the family liked it."
+1002,101,2004-01-09,4,"Very good, the family liked it."
+1002,109,2004-04-15,5,Excellent! Perfect as written.
+1002,117,2004-07-21,4,"Very good, the family liked it."
+1002,119,2004-10-26,5,Excellent! Perfect as written.
+1003,103,2005-01-31,5,Excellent! Perfect as written.
+1003,104,2005-05-08,0,"Have not made this yet but it looks great, saving it."
+1003,115,2005-08-13,5,Excellent! Perfect as written.
+1003,116,2005-11-18,4,"Very good, the family liked it."
+1003,113,2006-02-23,5,Excellent! Perfect as written.
+1004,105,2006-05-31,3,"Decent, would make again with changes."
+1004,112,2006-09-05,4,"Very good, the family liked it."
+1004,117,2006-12-11,5,Excellent! Perfect as written.
+1004,118,2007-03-18,4,"Very good, the family liked it."
+1005,106,2007-06-23,2,"It was okay, needed a lot more seasoning."
+1005,107,2007-09-28,4,"Very good, the family liked it."
+1005,118,2008-01-03,5,Excellent! Perfect as written.
+1005,114,2008-04-09,4,"Very good, the family liked it."
+1005,101,2008-07-15,5,Excellent! Perfect as written.
+1006,108,2008-10-20,4,"Very good, the family liked it."
+1006,112,2009-01-25,0,"Have not made this yet but it looks great, saving it."
+1006,120,2009-05-02,5,Excellent! Perfect as written.
+1006,102,2009-08-07,5,Excellent! Perfect as written.
+1007,110,2009-11-12,3,"Decent, would make again with changes."
+1007,104,2010-02-17,5,Excellent! Perfect as written.
+1007,115,2010-05-25,4,"Very good, the family liked it."
+1007,103,2010-08-30,4,"Very good, the family liked it."
+1008,119,2010-12-05,4,"Very good, the family liked it."
+1008,101,2011-03-12,3,"Decent, would make again with changes."
+1008,109,2011-06-17,4,"Very good, the family liked it."
+1008,116,2011-09-22,5,Excellent! Perfect as written.
+1008,102,2011-12-28,2,"It was okay, needed a lot more seasoning."
+1009,113,2012-04-03,5,Excellent! Perfect as written.
+1009,118,2012-07-09,0,"Have not made this yet but it looks great, saving it."
+1009,114,2012-10-14,5,Excellent! Perfect as written.
+1009,120,2013-01-19,4,"Very good, the family liked it."
+1010,105,2013-04-26,1,Did not work for us at all.
+1010,117,2013-08-01,3,"Decent, would make again with changes."
+1010,107,2013-11-06,5,Excellent! Perfect as written.
+1011,116,2014-02-11,4,
+1011,115,2014-05-19,5,Excellent! Perfect as written.
+1011,109,2014-08-24,5,Excellent! Perfect as written.
+1011,112,2014-11-29,3,"Decent, would make again with changes."
+1012,119,2015-03-06,0,"Have not made this yet but it looks great, saving it."
+1012,101,2015-06-11,5,Excellent! Perfect as written.
+1012,113,2015-09-16,4,"Very good, the family liked it."
+1013,104,2015-12-22,4,"Very good, the family liked it."
+1013,103,2016-03-28,5,Excellent! Perfect as written.
+1013,110,2016-07-03,2,"It was okay, needed a lot more seasoning."
+1013,108,2016-10-08,3,"Decent, would make again with changes."
+1014,102,2017-01-13,3,"Decent, would make again with changes."
+1014,114,2017-04-20,4,"Very good, the family liked it."
+1014,118,2017-07-26,5,Excellent! Perfect as written.
+1014,120,2017-10-31,4,"Very good, the family liked it."
+1014,106,2018-02-05,1,Did not work for us at all.
+1015,112,2018-05-13,5,Excellent! Perfect as written.

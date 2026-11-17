@@ -1,0 +1,47 @@
+# Project configuration: no hard-coded paths or magic numbers in code.
+# All paths under `paths` are RELATIVE to the DATA_ROOT environment variable,
+# except `local_sample_dir`, which is relative to the repository root.
+# Later stages ADD their own top-level blocks (e.g. `outliers:` in 1.4); they do not edit existing ones.
+
+project: food-recsys
+random_state: 42
+
+paths:
+  raw_dir: raw
+  raw_recipes: raw/RAW_recipes.csv
+  raw_interactions: raw/RAW_interactions.csv
+  outputs_dir: outputs
+  local_sample_dir: data/sample   # repo-relative copy of outputs/sample/<LATEST>/
+
+split:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+
+# Stage names = folder names under outputs/.
+# ArtifactStore refuses unknown stages.
+stages:
+  - loaded            # 1.0
+  - sample            # 1.0
+  - exploration       # 1.1
+  - quality           # 1.2
+  - missing           # 1.3
+  - outliers          # 1.4
+  - ingredients       # 1.5
+  - figures           # 1.6
+  - binning           # 1.7
+  - scaling           # 1.8
+  - splits            # 1.9
+  - pipeline          # 1.9
+  - knn_prototype     # 1.10
+  - modeling          # P2
+  - personalization   # P3
+
+load:
+  # Only empty CSV fields are missing. pandas' default NA list would also turn literal
+  # text such as "None", "NA" or "null" in names/reviews into NaN.
+  na_values: [""]
+
+sample:
+  n_recipes: 5000
+  stratify_col: n_ingredients

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "food-recsys"
+version = "0.1.0"
+description = "Food.com kNN / weighted kNN recipe recommender (CME 4403 term project)"
+requires-python = ">=3.10"
+# Unpinned on purpose: Colab ships these preinstalled and pinning would force
+# reinstalls that can break the runtime. Each output manifest records the git commit instead.
+dependencies = [
+    "pandas",
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "pyarrow",
+    "pyyaml",
+    "joblib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "python-docx"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
