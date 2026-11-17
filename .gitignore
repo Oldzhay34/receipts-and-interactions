@@ -1,0 +1,37 @@
+# Data lives on the shared Google Drive (DATA_ROOT), never in git.
+# Exception: data/sample/ (small real sample used by local tests).
+data/*
+!data/sample/
+outputs/
+
+# Local working notes (shared via Drive, not via git)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+CONSTITUTION.md
+CONTEXT.md
+NEXT.md
+deliverables/
+reports/decisions/
+
+# Secrets
+.env
+.env.*
+
+# Model / pickled artefacts
+*.joblib
+
+# IDE
+.idea/
+*.iml
+
+# Python / tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+build/
+dist/
