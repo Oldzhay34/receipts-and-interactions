@@ -507,9 +507,9 @@ QUALITY_ISSUES_SCHEMA = Schema(
 INGREDIENTS_OUTPUT_SCHEMA = Schema(
     name="ingredients_output",
     columns={
-        "id": Column(dtype="int", nullable=False, unique=True),
-        "ingredients": Column(dtype="object", nullable=False),
-        "ingredients_clean": Column(dtype="object", nullable=False),
-        "ingredients_filtered": Column(dtype="object", nullable=False),
+        "id": Column("int", nullable=False, unique=True),
+        "ingredients": Column("list", nullable=False),
+        "ingredients_clean": Column("list", nullable=False),
+        "ingredients_filtered": Column("list", nullable=False),
     },
 )
