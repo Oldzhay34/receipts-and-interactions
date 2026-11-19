@@ -503,3 +503,150 @@ QUALITY_ISSUES_SCHEMA = Schema(
     min_rows=1,
     description="Data quality issues produced in stage 1.2 for stages 1.3 and 1.4.",
 )
+
+
+# --------------------------------------------------------------------------- 1.3 missing
+# Tables of the `missing` stage (recsys.cleaning.missing analysis functions) and the contracts of
+# the data after the 1.3 transformers (used by the 1.9 pipeline).
+
+MISSING_RATES_SCHEMA = Schema(
+    "missing_rates",
+    {
+        "table": Column("str", nullable=False, allowed=frozenset({"recipes", "interactions"})),
+        "column": Column("str", nullable=False),
+        "kind": Column("str", nullable=False, allowed=frozenset({"null", "empty_list", "zero"})),
+        "n_rows": Column("int", nullable=False, min=0),
+        "n_missing": Column("int", nullable=False, min=0),
+        "share": Column("float", min=0.0, max=1.0),
+    },
+    unique_together=(("table", "column", "kind"),),
+    min_rows=1,
+)
+
+RATING_ZERO_REVIEW_STATS_SCHEMA = Schema(
+    "missing_rating_zero_review_stats",
+    {
+        "n_rows": Column("int", nullable=False, min=0),
+        "n_zero": Column("int", nullable=False, min=0),
+        "share_zero": Column("float", min=0.0, max=1.0),
+        "n_zero_with_review": Column("int", nullable=False, min=0),
+        "share_zero_with_review": Column("float", min=0.0, max=1.0),
+        "share_rated_with_review": Column("float", min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+RATING_ZERO_EXAMPLES_SCHEMA = Schema(
+    "missing_rating_zero_examples",
+    {
+        "user_id": Column("int", nullable=False),
+        "recipe_id": Column("int", nullable=False),
+        "date": Column("datetime"),
+        "review": Column("str"),
+    },
+)
+
+MINUTES_ZERO_SUMMARY_SCHEMA = Schema(
+    "missing_minutes_zero_summary",
+    {
+        "n_recipes": Column("int", nullable=False, min=0),
+        "n_minutes_zero": Column("int", nullable=False, min=0),
+        "share_minutes_zero": Column("float", min=0.0, max=1.0),
+        "n_zero_with_no_cook_tag": Column("int", nullable=False, min=0),
+        "share_zero_with_no_cook_tag": Column("float", min=0.0, max=1.0),
+        "share_all_with_no_cook_tag": Column("float", min=0.0, max=1.0),
+        "median_n_steps_zero": Column("float", min=0.0),
+        "median_n_steps_all": Column("float", min=0.0),
+        "median_n_ingredients_zero": Column("float", min=0.0),
+        "median_n_ingredients_all": Column("float", min=0.0),
+    },
+    min_rows=1,
+)
+
+MINUTES_ZERO_TAGS_SCHEMA = Schema(
+    "missing_minutes_zero_tags",
+    {
+        "tag": Column("str", nullable=False, unique=True),
+        "n_zero": Column("int", nullable=False, min=1),
+        "share_in_zero": Column("float", nullable=False, min=0.0, max=1.0),
+        "share_in_all": Column("float", nullable=False, min=0.0, max=1.0),
+        "lift": Column("float", nullable=False, min=0.0),
+    },
+)
+
+MINUTES_ZERO_N_STEPS_SCHEMA = Schema(
+    "missing_minutes_zero_n_steps",
+    {
+        "n_steps": Column("int", nullable=False, unique=True, min=0),
+        "n_zero": Column("int", nullable=False, min=0),
+        "share_zero": Column("float", min=0.0, max=1.0),
+        "n_all": Column("int", nullable=False, min=0),
+        "share_all": Column("float", nullable=False, min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+MINUTES_ZERO_EXAMPLES_SCHEMA = Schema(
+    "missing_minutes_zero_examples",
+    {
+        "id": Column("int", nullable=False, unique=True),
+        "name": Column("str"),
+        "n_steps": Column("int", nullable=False, min=0),
+        "n_ingredients": Column("int", nullable=False, min=0),
+        "tags": Column("str", nullable=False),
+        "first_step": Column("str", nullable=False),
+    },
+)
+
+MAIN_TAG_COVERAGE_SCHEMA = Schema(
+    "missing_main_tag_coverage",
+    {
+        "main_tag": Column("str", nullable=False, unique=True),
+        "n_recipes": Column("int", nullable=False, min=0),
+        "share": Column("float", min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+IMPUTER_GROUPS_SCHEMA = Schema(
+    "missing_imputer_groups",
+    {
+        "group": Column("str", nullable=False, unique=True),
+        "main_tag": Column("str", nullable=False),
+        "n_steps_bin": Column("int", nullable=False, min=0),
+        "n_observed": Column("int", nullable=False, min=1),
+        "median": Column("float", nullable=False),
+        "used": Column("bool", nullable=False),
+    },
+    min_rows=1,
+)
+
+#: object name in the ``missing`` stage -> schema (pass as ``schemas=`` to ArtifactStore.save).
+MISSING_OUTPUT_SCHEMA: Mapping[str, Schema] = {
+    "missing_rates": MISSING_RATES_SCHEMA,
+    "related_issues": QUALITY_ISSUES_SCHEMA,
+    "rating_zero_review_stats": RATING_ZERO_REVIEW_STATS_SCHEMA,
+    "rating_zero_examples": RATING_ZERO_EXAMPLES_SCHEMA,
+    "minutes_zero_summary": MINUTES_ZERO_SUMMARY_SCHEMA,
+    "minutes_zero_tags": MINUTES_ZERO_TAGS_SCHEMA,
+    "minutes_zero_n_steps": MINUTES_ZERO_N_STEPS_SCHEMA,
+    "minutes_zero_examples": MINUTES_ZERO_EXAMPLES_SCHEMA,
+    "main_tag_coverage": MAIN_TAG_COVERAGE_SCHEMA,
+    "imputer_groups": IMPUTER_GROUPS_SCHEMA,
+}
+
+#: Interactions after RatingZeroToNaN: rating is float, 0 no longer allowed.
+INTERACTIONS_AFTER_MISSING_SCHEMA = LOADED_INTERACTIONS_SCHEMA.derive(
+    "interactions_after_missing",
+    add={"rating": Column("float", min=1.0, max=5.0)},
+)
+
+#: Recipes after ZeroAsMissing + GroupMedianImputer(minutes) + mark_has_rating.
+RECIPES_AFTER_MISSING_SCHEMA = LOADED_RECIPES_SCHEMA.derive(
+    "recipes_after_missing",
+    add={
+        "minutes": Column("float", nullable=False, min=0.0),
+        "minutes_was_missing": Column("bool", nullable=False),
+        "has_rating": Column("bool", nullable=False),
+    },
+)
