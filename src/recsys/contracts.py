@@ -361,6 +361,145 @@ LOADED_INTERACTIONS_SCHEMA = Schema(
     min_rows=1,
 )
 
+
 # =========================================================================== later stages
 # Stage schemas added by later stages
 # (append below; one block per stage, headed with its stage id)
+
+# --------------------------------------------------------------------------- 1.1 exploration
+# Output tables of recsys.analysis.explore (stage `exploration`).
+
+EXPLORATION_TYPE_CLASSES: tuple[str, ...] = (
+    "continuous",
+    "categorical",
+    "text",
+    "list",
+    "datetime",
+)
+RATING_VALUES: tuple[int, ...] = tuple(sorted(_RATING_DOMAIN))
+
+COLUMN_TYPES_SCHEMA = Schema(
+    "exploration_column_types",
+    {
+        "table": Column("str", nullable=False),
+        "column": Column("str", nullable=False),
+        "dtype": Column("str", nullable=False),
+        "type_class": Column("str", nullable=False, allowed=frozenset(EXPLORATION_TYPE_CLASSES)),
+        "source": Column("str", nullable=False, allowed=frozenset({"declared", "inferred"})),
+        "note": Column("str", nullable=False),
+        "n_missing": Column("int", nullable=False, min=0),
+        "n_unique": Column("int", min=0),
+    },
+    unique_together=(("table", "column"),),
+    min_rows=1,
+)
+
+BASIC_COUNTS_SCHEMA = Schema(
+    "exploration_basic_counts",
+    {
+        **{
+            c: Column("int", nullable=False, min=0)
+            for c in (
+                "n_recipes",
+                "n_interactions",
+                "n_users",
+                "n_contributors",
+                "n_recipes_with_interactions",
+                "n_recipes_without_interactions",
+                "n_orphan_interactions",
+                "n_duplicate_interactions",
+                "n_repeated_user_recipe_pairs",
+            )
+        },
+        "interactions_date_min": Column("datetime"),
+        "interactions_date_max": Column("datetime"),
+        "recipes_submitted_min": Column("datetime"),
+        "recipes_submitted_max": Column("datetime"),
+    },
+    min_rows=1,
+)
+
+PER_ENTITY_COUNTS_SCHEMA = Schema(
+    "exploration_per_entity_counts",
+    {
+        "entity": Column("str", nullable=False, unique=True, allowed=frozenset({"recipe", "user"})),
+        "n_entities": Column("int", nullable=False, min=0),
+        "n_zero": Column("int", nullable=False, min=0),
+        "n_one": Column("int", nullable=False, min=0),
+        "pct_one": Column("float", min=0.0, max=1.0),
+        "mean": Column("float", min=0.0),
+        "std": Column("float", min=0.0),
+        "min": Column("int", nullable=False, min=0),
+        "q25": Column("float", min=0.0),
+        "median": Column("float", min=0.0),
+        "q75": Column("float", min=0.0),
+        "max": Column("int", nullable=False, min=0),
+    },
+    min_rows=2,
+)
+
+RATING_COUNTS_SCHEMA = Schema(
+    "exploration_rating_counts",
+    {
+        "rating": Column("int", nullable=False, unique=True, allowed=frozenset(RATING_VALUES)),
+        "count": Column("int", nullable=False, min=0),
+        "share": Column("float", min=0.0, max=1.0),
+        "share_of_rated": Column("float", min=0.0, max=1.0),
+        "is_zero": Column("bool", nullable=False),
+        "note": Column("str", nullable=False),
+    },
+    min_rows=len(RATING_VALUES),
+)
+
+TOP_ITEMS_SCHEMA = Schema(
+    "exploration_top_items",
+    {
+        "kind": Column("str", nullable=False, allowed=frozenset({"ingredient", "tag"})),
+        "rank": Column("int", nullable=False, min=1),
+        "item": Column("str", nullable=False),
+        "n_recipes": Column("int", nullable=False, min=1),
+        "share_of_recipes": Column("float", nullable=False, min=0.0, max=1.0),
+    },
+    unique_together=(("kind", "rank"), ("kind", "item")),
+    min_rows=1,
+)
+
+EXPLORATORY_TARGETS_SCHEMA = Schema(
+    "exploration_targets",
+    {
+        "recipe_id": Column("int", nullable=False, unique=True),
+        "n_interactions": Column("int", nullable=False, min=0),
+        "n_ratings": Column("int", nullable=False, min=0),
+        "avg_rating": Column("float", min=1.0, max=5.0),
+        "has_rating": Column("bool", nullable=False),
+    },
+    min_rows=1,
+)
+
+#: object name in the ``exploration`` stage -> schema (pass as ``schemas=`` to ArtifactStore.save).
+EXPLORATION_SCHEMAS: Mapping[str, Schema] = {
+    "column_types": COLUMN_TYPES_SCHEMA,
+    "basic_counts": BASIC_COUNTS_SCHEMA,
+    "per_entity_counts": PER_ENTITY_COUNTS_SCHEMA,
+    "rating_counts": RATING_COUNTS_SCHEMA,
+    "top_items": TOP_ITEMS_SCHEMA,
+    "exploratory_targets": EXPLORATORY_TARGETS_SCHEMA,
+}
+
+
+# --------------------------------------------------------------------------- 1.2 quality
+# Issues table of recsys.analysis.quality.detect_issues (stage `quality`); read by 1.3 and 1.4.
+
+QUALITY_ISSUES_SCHEMA = Schema(
+    name="quality_issues",
+    columns={
+        "issue_id": Column("str", nullable=False, unique=True),
+        "column": Column("str", nullable=False),
+        "rule": Column("str", nullable=False),
+        "affected_rows": Column("int", nullable=False, min=0),
+        "example_ids": Column("str", nullable=False),
+        "suggested_action": Column("str", nullable=False),
+    },
+    min_rows=1,
+    description="Data quality issues produced in stage 1.2 for stages 1.3 and 1.4.",
+)

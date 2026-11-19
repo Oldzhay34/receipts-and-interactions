@@ -15,6 +15,7 @@ from recsys.analysis.quality import (
     continuous_dqr,
     detect_issues,
     list_column_dqr,
+    register_issue_rule,
     render_table_png,
 )
 from recsys.contracts import QUALITY_ISSUES_SCHEMA, validate
@@ -116,24 +117,54 @@ def test_list_column_dqr(sample_frames: tuple[pd.DataFrame, pd.DataFrame]) -> No
     assert ing_row["Unique Items"] == 9
 
 
-def test_detect_issues_all_8_rules_and_schema(
+def test_detect_issues_all_rules_and_schema(
     sample_frames: tuple[pd.DataFrame, pd.DataFrame],
 ) -> None:
     recipes, interactions = sample_frames
-    assert len(ISSUE_RULES) == 8
+    assert len(ISSUE_RULES) == 9
 
     issues = detect_issues(recipes, interactions)
     validate(issues, QUALITY_ISSUES_SCHEMA)
 
-    counts = dict(zip(issues["issue_id"], issues["affected_rows"]))
-    assert counts["rating_zero"] == 2
-    assert counts["minutes_zero"] == 1
-    assert counts["minutes_extreme"] == 1
-    assert counts["n_steps_zero"] == 1
-    assert counts["missing_text_fields"] == 3
-    assert counts["duplicate_interactions"] == 1
-    assert counts["recipes_without_rating"] == 2  # recipe 2 (only 0 rating) and recipe 5 (no rating)
-    assert counts["missing_recipe_name"] == 1
+    counts = dict(zip(issues["issue_id"], issues["affected_rows"], strict=True))
+    assert counts == {
+        "rating_zero": 2,
+        "minutes_zero": 1,
+        "minutes_extreme": 1,
+        "n_steps_zero": 1,
+        "missing_name": 1,
+        "missing_description": 1,
+        "missing_review": 1,
+        "duplicate_interactions": 1,
+        # recipe 2 (only 0 ratings) and recipe 5 (no interaction)
+        "recipes_without_rating": 2,
+    }
+
+
+def test_interaction_rules_identify_rows_by_user_and_recipe(
+    sample_frames: tuple[pd.DataFrame, pd.DataFrame],
+) -> None:
+    recipes, interactions = sample_frames
+    issues = detect_issues(recipes, interactions).set_index("issue_id")
+    assert issues.loc["rating_zero", "example_ids"] == "11:2, 11:2"
+    assert issues.loc["missing_review", "example_ids"] == "12:3"
+    assert issues.loc["duplicate_interactions", "example_ids"] == "11:2"
+    assert issues.loc["minutes_extreme", "example_ids"] == "3"
+
+
+def test_detect_issues_on_repo_fixtures(fixture_recipes, fixture_interactions) -> None:
+    """Every edge case documented in tests/fixtures/build_fixtures.py is caught."""
+    issues = detect_issues(fixture_recipes, fixture_interactions).set_index("issue_id")
+    validate(issues.reset_index(), QUALITY_ISSUES_SCHEMA)
+    assert issues.loc["rating_zero", "affected_rows"] == 4
+    assert issues.loc["minutes_zero", "example_ids"] == "103, 105"
+    assert issues.loc["minutes_extreme", "example_ids"] == "106, 107"
+    assert issues.loc["n_steps_zero", "example_ids"] == "110"
+    assert issues.loc["missing_name", "example_ids"] == "108"
+    assert issues.loc["missing_description", "example_ids"] == "109"
+    assert issues.loc["missing_review", "example_ids"] == "1011:116"
+    assert issues.loc["duplicate_interactions", "example_ids"] == "1002:101"
+    assert issues.loc["recipes_without_rating", "example_ids"] == "111"
 
 
 def test_detect_issues_extensible_rules(sample_frames: tuple[pd.DataFrame, pd.DataFrame]) -> None:
@@ -143,12 +174,24 @@ def test_detect_issues_extensible_rules(sample_frames: tuple[pd.DataFrame, pd.Da
         column="recipes.calories",
         rule="calories < 10",
         suggested_action="Review low-calorie beverages",
-        finder=lambda r, _: r.loc[r["calories"] < 10, "id"].astype(int).tolist(),
+        finder=lambda r, _: r.loc[r["calories"] < 10, "id"].astype(str).tolist(),
     )
     issues = detect_issues(recipes, interactions, rules=[custom_rule])
     validate(issues, QUALITY_ISSUES_SCHEMA)
     assert len(issues) == 1
     assert issues.loc[0, "affected_rows"] == 1
+
+
+def test_reregistering_a_rule_replaces_it() -> None:
+    saved = list(ISSUE_RULES)
+    try:
+        register_issue_rule("minutes_zero", "recipes.minutes", "minutes == 0", "same")(
+            lambda r, _: []
+        )
+        assert len(ISSUE_RULES) == len(saved)
+        assert [r.issue_id for r in ISSUE_RULES].count("minutes_zero") == 1
+    finally:
+        ISSUE_RULES[:] = saved  # restore the original rule set for other tests
 
 
 def test_render_table_png_returns_figure(sample_frames: tuple[pd.DataFrame, pd.DataFrame]) -> None:

@@ -7,8 +7,9 @@ Inputs are the ``loaded`` stage tables (LOADED_RECIPES_SCHEMA / LOADED_INTERACTI
 Loading is faithful, so these tables still contain rating = 0 rows and duplicate interactions;
 each function states how it treats them.
 
-Output schemas for the ``exploration`` stage are defined at the bottom of this module
-(:data:`EXPLORATION_SCHEMAS`) and passed to ``ArtifactStore.save``.
+Output schemas for the ``exploration`` stage live in :mod:`recsys.contracts`
+(:data:`~recsys.contracts.EXPLORATION_SCHEMAS`, re-exported here) and are passed to
+``ArtifactStore.save``.
 """
 
 from __future__ import annotations
@@ -19,9 +20,20 @@ import numpy as np
 import pandas as pd
 from pandas.api import types as ptypes
 
-from recsys.contracts import Column, Schema
+from recsys.contracts import EXPLORATION_SCHEMAS, RATING_VALUES
+from recsys.contracts import EXPLORATION_TYPE_CLASSES as TYPE_CLASSES
 
-TYPE_CLASSES: tuple[str, ...] = ("continuous", "categorical", "text", "list", "datetime")
+__all__ = [
+    "DECLARED_COLUMN_TYPES",
+    "EXPLORATION_SCHEMAS",
+    "TYPE_CLASSES",
+    "basic_counts",
+    "column_type_table",
+    "exploratory_targets",
+    "per_entity_counts",
+    "rating_counts",
+    "top_items",
+]
 
 #: Analyst-declared type of every Food.com column. Declared types win over inference, because
 #: inference from a small sample can misclassify (e.g. n_steps with few distinct values).
@@ -52,7 +64,6 @@ DECLARED_COLUMN_TYPES: Mapping[str, tuple[str, str]] = {
     "review": ("text", ""),
 }
 
-RATING_VALUES: tuple[int, ...] = (0, 1, 2, 3, 4, 5)
 _NO_RATING_NOTE = "no stars given (becomes NaN in 1.3)"
 
 
@@ -306,115 +317,3 @@ def _count_stats(entity: str, counts: pd.Series) -> dict[str, object]:
         "q75": float(c.quantile(0.75)) if n else np.nan,
         "max": int(c.max()) if n else 0,
     }
-
-
-# =========================================================================== output schemas
-# Defined here because stage 1.1 does not own recsys/contracts.py.
-
-COLUMN_TYPES_SCHEMA = Schema(
-    "exploration_column_types",
-    {
-        "table": Column("str", nullable=False),
-        "column": Column("str", nullable=False),
-        "dtype": Column("str", nullable=False),
-        "type_class": Column("str", nullable=False, allowed=frozenset(TYPE_CLASSES)),
-        "source": Column("str", nullable=False, allowed=frozenset({"declared", "inferred"})),
-        "note": Column("str", nullable=False),
-        "n_missing": Column("int", nullable=False, min=0),
-        "n_unique": Column("int", min=0),
-    },
-    unique_together=(("table", "column"),),
-    min_rows=1,
-)
-
-BASIC_COUNTS_SCHEMA = Schema(
-    "exploration_basic_counts",
-    {
-        **{
-            c: Column("int", nullable=False, min=0)
-            for c in (
-                "n_recipes",
-                "n_interactions",
-                "n_users",
-                "n_contributors",
-                "n_recipes_with_interactions",
-                "n_recipes_without_interactions",
-                "n_orphan_interactions",
-                "n_duplicate_interactions",
-                "n_repeated_user_recipe_pairs",
-            )
-        },
-        "interactions_date_min": Column("datetime"),
-        "interactions_date_max": Column("datetime"),
-        "recipes_submitted_min": Column("datetime"),
-        "recipes_submitted_max": Column("datetime"),
-    },
-    min_rows=1,
-)
-
-PER_ENTITY_COUNTS_SCHEMA = Schema(
-    "exploration_per_entity_counts",
-    {
-        "entity": Column("str", nullable=False, unique=True, allowed=frozenset({"recipe", "user"})),
-        "n_entities": Column("int", nullable=False, min=0),
-        "n_zero": Column("int", nullable=False, min=0),
-        "n_one": Column("int", nullable=False, min=0),
-        "pct_one": Column("float", min=0.0, max=1.0),
-        "mean": Column("float", min=0.0),
-        "std": Column("float", min=0.0),
-        "min": Column("int", nullable=False, min=0),
-        "q25": Column("float", min=0.0),
-        "median": Column("float", min=0.0),
-        "q75": Column("float", min=0.0),
-        "max": Column("int", nullable=False, min=0),
-    },
-    min_rows=2,
-)
-
-RATING_COUNTS_SCHEMA = Schema(
-    "exploration_rating_counts",
-    {
-        "rating": Column("int", nullable=False, unique=True, allowed=frozenset(RATING_VALUES)),
-        "count": Column("int", nullable=False, min=0),
-        "share": Column("float", min=0.0, max=1.0),
-        "share_of_rated": Column("float", min=0.0, max=1.0),
-        "is_zero": Column("bool", nullable=False),
-        "note": Column("str", nullable=False),
-    },
-    min_rows=len(RATING_VALUES),
-)
-
-TOP_ITEMS_SCHEMA = Schema(
-    "exploration_top_items",
-    {
-        "kind": Column("str", nullable=False, allowed=frozenset({"ingredient", "tag"})),
-        "rank": Column("int", nullable=False, min=1),
-        "item": Column("str", nullable=False),
-        "n_recipes": Column("int", nullable=False, min=1),
-        "share_of_recipes": Column("float", nullable=False, min=0.0, max=1.0),
-    },
-    unique_together=(("kind", "rank"), ("kind", "item")),
-    min_rows=1,
-)
-
-EXPLORATORY_TARGETS_SCHEMA = Schema(
-    "exploration_targets",
-    {
-        "recipe_id": Column("int", nullable=False, unique=True),
-        "n_interactions": Column("int", nullable=False, min=0),
-        "n_ratings": Column("int", nullable=False, min=0),
-        "avg_rating": Column("float", min=1.0, max=5.0),
-        "has_rating": Column("bool", nullable=False),
-    },
-    min_rows=1,
-)
-
-#: object name in the ``exploration`` stage -> schema (pass as ``schemas=`` to ArtifactStore.save).
-EXPLORATION_SCHEMAS: Mapping[str, Schema] = {
-    "column_types": COLUMN_TYPES_SCHEMA,
-    "basic_counts": BASIC_COUNTS_SCHEMA,
-    "per_entity_counts": PER_ENTITY_COUNTS_SCHEMA,
-    "rating_counts": RATING_COUNTS_SCHEMA,
-    "top_items": TOP_ITEMS_SCHEMA,
-    "exploratory_targets": EXPLORATORY_TARGETS_SCHEMA,
-}
