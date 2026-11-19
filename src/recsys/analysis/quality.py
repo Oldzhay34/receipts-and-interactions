@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -114,15 +114,27 @@ def list_column_dqr(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+#: Recipes longer than this are flagged as extreme (7 days). Detection only: the treatment and
+#: the final threshold are decided with evidence in stage 1.4.
+MINUTES_EXTREME_THRESHOLD = 7 * 24 * 60
+
+Finder = Callable[[pd.DataFrame, pd.DataFrame], list[str]]
+
+
 @dataclass(frozen=True)
 class IssueRule:
-    """Declarative data quality rule registered for detect_issues."""
+    """Declarative data quality rule registered for detect_issues.
+
+    ``finder`` returns one identifier per affected row: the recipe ``id`` for recipe rules and
+    ``"user_id:recipe_id"`` for interaction rules, so stages 1.3 and 1.4 can locate the rows in
+    the full ``loaded`` tables.
+    """
 
     issue_id: str
     column: str
     rule: str
     suggested_action: str
-    finder: Callable[[pd.DataFrame, pd.DataFrame], list[int]]
+    finder: Finder
 
 
 ISSUE_RULES: list[IssueRule] = []
@@ -133,12 +145,15 @@ def register_issue_rule(
     column: str,
     rule: str,
     suggested_action: str,
-) -> Callable[[Callable[[pd.DataFrame, pd.DataFrame], list[int]]], Callable[[pd.DataFrame, pd.DataFrame], list[int]]]:
-    """Register a new data quality issue rule without modifying detect_issues."""
+) -> Callable[[Finder], Finder]:
+    """Register a new data quality issue rule without modifying detect_issues.
 
-    def decorator(
-        fn: Callable[[pd.DataFrame, pd.DataFrame], list[int]],
-    ) -> Callable[[pd.DataFrame, pd.DataFrame], list[int]]:
+    Registering an ``issue_id`` again (e.g. after a notebook reload) replaces the old rule
+    instead of adding a duplicate.
+    """
+
+    def decorator(fn: Finder) -> Finder:
+        ISSUE_RULES[:] = [r for r in ISSUE_RULES if r.issue_id != issue_id]
         ISSUE_RULES.append(
             IssueRule(
                 issue_id=issue_id,
@@ -153,37 +168,43 @@ def register_issue_rule(
     return decorator
 
 
+def _recipe_ids(recipes: pd.DataFrame, mask: pd.Series) -> list[str]:
+    return recipes.loc[mask, "id"].astype("int64").astype(str).tolist()
+
+
+def _interaction_keys(interactions: pd.DataFrame, mask: pd.Series) -> list[str]:
+    rows = interactions.loc[mask, ["user_id", "recipe_id"]].astype("int64")
+    return (rows["user_id"].astype(str) + ":" + rows["recipe_id"].astype(str)).tolist()
+
+
 @register_issue_rule(
     issue_id="rating_zero",
     column="interactions.rating",
     rule="rating == 0 (unrated interaction on Food.com)",
     suggested_action="Convert 0 to NaN in Stage 1.3; exclude from rating averages",
 )
-def _find_rating_zero(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    mask = interactions["rating"] == 0
-    return interactions.loc[mask, "recipe_id"].astype(int).tolist()
+def _find_rating_zero(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _interaction_keys(interactions, interactions["rating"] == 0)
 
 
 @register_issue_rule(
     issue_id="minutes_zero",
     column="recipes.minutes",
     rule="minutes == 0",
-    suggested_action="Investigate no-cook vs missing in Stage 1.3; impute via GroupMedianImputer if missing",
+    suggested_action="Stage 1.3: decide no-cook vs missing; impute (GroupMedianImputer) if missing",
 )
-def _find_minutes_zero(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    mask = recipes["minutes"] == 0
-    return recipes.loc[mask, "id"].astype(int).tolist()
+def _find_minutes_zero(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _recipe_ids(recipes, recipes["minutes"] == 0)
 
 
 @register_issue_rule(
     issue_id="minutes_extreme",
     column="recipes.minutes",
-    rule="minutes > 10080 (more than 7 days)",
-    suggested_action="Treat as invalid/extreme outlier in Stage 1.4 (InvalidValueRule / QuantileClipper)",
+    rule=f"minutes > {MINUTES_EXTREME_THRESHOLD} (more than 7 days)",
+    suggested_action="Stage 1.4: invalid vs extreme value (InvalidValueRule / QuantileClipper)",
 )
-def _find_minutes_extreme(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    mask = recipes["minutes"] > 10080
-    return recipes.loc[mask, "id"].astype(int).tolist()
+def _find_minutes_extreme(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _recipe_ids(recipes, recipes["minutes"] > MINUTES_EXTREME_THRESHOLD)
 
 
 @register_issue_rule(
@@ -192,21 +213,38 @@ def _find_minutes_extreme(recipes: pd.DataFrame, interactions: pd.DataFrame) -> 
     rule="n_steps == 0",
     suggested_action="Flag as invalid value in Stage 1.4",
 )
-def _find_n_steps_zero(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    mask = recipes["n_steps"] == 0
-    return recipes.loc[mask, "id"].astype(int).tolist()
+def _find_n_steps_zero(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _recipe_ids(recipes, recipes["n_steps"] == 0)
 
 
 @register_issue_rule(
-    issue_id="missing_text_fields",
-    column="recipes.name, recipes.description, interactions.review",
-    rule="Missing (NaN) values in name, description, or review",
-    suggested_action="Handle per-column in Stage 1.3 (drop missing name, keep/fill description and review)",
+    issue_id="missing_name",
+    column="recipes.name",
+    rule="recipes.name is null",
+    suggested_action="Stage 1.3: keep the recipe (id identifies it); fill a placeholder name",
 )
-def _find_missing_text(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    r_miss = recipes.loc[recipes["name"].isna() | recipes["description"].isna(), "id"].astype(int).tolist()
-    i_miss = interactions.loc[interactions["review"].isna(), "recipe_id"].astype(int).tolist()
-    return r_miss + i_miss
+def _find_missing_name(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _recipe_ids(recipes, recipes["name"].isna())
+
+
+@register_issue_rule(
+    issue_id="missing_description",
+    column="recipes.description",
+    rule="recipes.description is null",
+    suggested_action="Stage 1.3: keep the recipe; description is not a model feature",
+)
+def _find_missing_description(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _recipe_ids(recipes, recipes["description"].isna())
+
+
+@register_issue_rule(
+    issue_id="missing_review",
+    column="interactions.review",
+    rule="interactions.review is null",
+    suggested_action="Stage 1.3: keep the interaction; the rating is still usable",
+)
+def _find_missing_review(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _interaction_keys(interactions, interactions["review"].isna())
 
 
 @register_issue_rule(
@@ -215,32 +253,19 @@ def _find_missing_text(recipes: pd.DataFrame, interactions: pd.DataFrame) -> lis
     rule="Exact duplicate interaction rows",
     suggested_action="Drop exact duplicates in Stage 1.3",
 )
-def _find_duplicate_interactions(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    mask = interactions.duplicated(keep="first")
-    return interactions.loc[mask, "recipe_id"].astype(int).tolist()
+def _find_duplicate_interactions(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    return _interaction_keys(interactions, interactions.duplicated(keep="first"))
 
 
 @register_issue_rule(
     issue_id="recipes_without_rating",
     column="recipes.id",
     rule="Recipe has no non-zero rating in interactions",
-    suggested_action="Mark has_rating=False in Stage 1.3; exclude from training, keep in recommendation pool",
+    suggested_action="Stage 1.3: has_rating=False; exclude from training, keep in the pool",
 )
-def _find_recipes_without_rating(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    rated_ids = set(interactions.loc[interactions["rating"] > 0, "recipe_id"].dropna().astype(int))
-    mask = ~recipes["id"].astype(int).isin(rated_ids)
-    return recipes.loc[mask, "id"].astype(int).tolist()
-
-
-@register_issue_rule(
-    issue_id="missing_recipe_name",
-    column="recipes.name",
-    rule="recipes.name is null",
-    suggested_action="Drop rows missing critical identifier in Stage 1.3",
-)
-def _find_missing_name(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[int]:
-    mask = recipes["name"].isna()
-    return recipes.loc[mask, "id"].astype(int).tolist()
+def _find_recipes_without_rating(recipes: pd.DataFrame, interactions: pd.DataFrame) -> list[str]:
+    rated = interactions.loc[interactions["rating"] > 0, "recipe_id"].dropna().astype("int64")
+    return _recipe_ids(recipes, ~recipes["id"].astype("int64").isin(set(rated)))
 
 
 def detect_issues(
@@ -249,7 +274,11 @@ def detect_issues(
     rules: list[IssueRule] | None = None,
     max_examples: int = 5,
 ) -> pd.DataFrame:
-    """Run all registered data quality rules and return a standardized issues table."""
+    """Run all registered data quality rules and return a standardized issues table.
+
+    ``example_ids`` holds up to ``max_examples`` identifiers, comma separated: recipe ids for
+    recipe rules, ``user_id:recipe_id`` for interaction rules.
+    """
     active_rules = ISSUE_RULES if rules is None else rules
     records: list[dict[str, object]] = []
 
@@ -266,7 +295,9 @@ def detect_issues(
             }
         )
 
-    return pd.DataFrame(records)
+    out = pd.DataFrame(records)
+    out["affected_rows"] = out["affected_rows"].astype("int64")
+    return out
 
 
 def render_table_png(df: pd.DataFrame, title: str, max_col_width: int = 36) -> Figure:
