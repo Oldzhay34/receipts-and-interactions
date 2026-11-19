@@ -503,3 +503,13 @@ QUALITY_ISSUES_SCHEMA = Schema(
     min_rows=1,
     description="Data quality issues produced in stage 1.2 for stages 1.3 and 1.4.",
 )
+
+INGREDIENTS_OUTPUT_SCHEMA = Schema(
+    name="ingredients_output",
+    columns={
+        "id": Column(dtype="int", nullable=False, unique=True),
+        "ingredients": Column(dtype="object", nullable=False),
+        "ingredients_clean": Column(dtype="object", nullable=False),
+        "ingredients_filtered": Column(dtype="object", nullable=False),
+    },
+)

@@ -45,3 +45,53 @@ load:
 sample:
   n_recipes: 5000
   stratify_col: n_ingredients
+
+ingredients:
+  min_count: 10
+  encoding_strategy: "binary"
+  modifiers:
+    - fresh
+    - freshly
+    - dried
+    - dry
+    - chopped
+    - finely
+    - coarsely
+    - minced
+    - sliced
+    - diced
+    - grated
+    - shredded
+    - crushed
+    - ground
+    - whole
+    - large
+    - medium
+    - small
+    - extra
+    - virgin
+    - cold
+    - warm
+    - hot
+    - frozen
+    - thawed
+    - canned
+    - drained
+    - rinsed
+    - peeled
+    - seeded
+    - pitted
+    - boneless
+    - skinless
+    - unsalted
+    - salted
+    - sweet
+    - raw
+    - cooked
+    - roasted
+    - toasted
+    - melted
+    - softened
+    - room temperature
+    - optional
+    - to taste  
