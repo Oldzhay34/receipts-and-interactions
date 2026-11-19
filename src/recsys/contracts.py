@@ -360,6 +360,21 @@ LOADED_INTERACTIONS_SCHEMA = Schema(
     },
     min_rows=1,
 )
+# =========================================================================== 1.2 schemas
+
+QUALITY_ISSUES_SCHEMA = Schema(
+    name="quality_issues",
+    columns={
+        "issue_id": Column("str", nullable=False, unique=True),
+        "column": Column("str", nullable=False),
+        "rule": Column("str", nullable=False),
+        "affected_rows": Column("int", nullable=False, min=0),
+        "example_ids": Column("str", nullable=False),
+        "suggested_action": Column("str", nullable=False),
+    },
+    min_rows=1,
+    description="Standardized data quality issues table produced in Stage 1.2 for Stages 1.3 and 1.4.",
+)
 
 
 # =========================================================================== later stages
