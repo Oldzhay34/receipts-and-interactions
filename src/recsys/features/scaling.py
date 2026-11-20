@@ -30,6 +30,23 @@ except ImportError:
             return np.log1p(np.clip(arr, a_min=0.0, a_max=None))
 
 
+class _Log1pAdapter(BaseEstimator, TransformerMixin):
+    """Wraps 1.4's Log1pTransformer so it accepts both DataFrame and ndarray."""
+
+    def __init__(self) -> None:
+        self._inner = Log1pTransformer()
+
+    def fit(self, X: Any, y: Optional[Any] = None) -> "_Log1pAdapter":
+        df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        self._inner.fit(df, y)
+        return self
+
+    def transform(self, X: Any) -> np.ndarray:
+        df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        out = self._inner.transform(df)
+        return np.asarray(out, dtype=float)
+
+
 def _extract_scaling_cfg(cfg: Any) -> dict[str, Any]:
     """Read scaling settings from dict or config object with safe defaults."""
     if isinstance(cfg, Mapping):
@@ -56,7 +73,7 @@ def build_numeric_scaler(cfg: Any = None) -> Pipeline:
 
     steps: list[tuple[str, BaseEstimator]] = []
     if use_log1p:
-        steps.append(("log1p", Log1pTransformer()))
+        steps.append(("log1p", _Log1pAdapter()))
 
     if method in ("minmax", "min_max"):
         steps.append(("scaler", MinMaxScaler()))
