@@ -95,3 +95,20 @@ ingredients:
     - room temperature
     - optional
     - to taste  
+
+binning:
+  minutes:
+    strategy: domain
+    edges: [0, 30, 60, .inf]
+    labels: ["quick", "medium", "long"]
+    output_col: minutes_bin
+  calories:
+    strategy: equal_frequency
+    n_bins: 3
+    labels: ["low", "medium", "high"]
+    output_col: calories_bin
+  avg_rating:
+    strategy: domain
+    edges: [0, 3.5, 4.5, 5.0]
+    labels: ["low", "medium", "high"]
+    output_col: rating_class    
