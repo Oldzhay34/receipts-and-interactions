@@ -112,3 +112,35 @@ binning:
     edges: [0, 3.5, 4.5, 5.0]
     labels: ["low", "medium", "high"]
     output_col: rating_class    
+# Outlier treatment (1.4). `columns` lists the strategies applied to each column; they always
+# run in the order invalid_rule -> quantile_clip -> log1p (recsys.cleaning.outliers.STEP_ORDER).
+# invalid_rule: domain bounds [lower, upper] (null = no bound); values outside become NaN.
+#   minutes upper = 30 days in minutes: longer values are data-entry errors, not recipes.
+# quantile_clip: bounds learned from TRAIN data only (1.9 pipeline).
+# log1p: only for columns still strongly right-skewed (skew > 1) after clipping.
+outliers:
+  invalid_rule:
+    minutes: [0, 43200]
+    n_steps: [1, null]
+    n_ingredients: [1, null]
+    calories: [0, null]
+    total_fat_pdv: [0, null]
+    sugar_pdv: [0, null]
+    sodium_pdv: [0, null]
+    protein_pdv: [0, null]
+    saturated_fat_pdv: [0, null]
+    carbohydrates_pdv: [0, null]
+  quantile_clip:
+    lower_q: 0.0
+    upper_q: 0.99
+  columns:
+    minutes: [invalid_rule, quantile_clip, log1p]
+    n_steps: [invalid_rule, quantile_clip, log1p]
+    n_ingredients: [invalid_rule, quantile_clip]
+    calories: [invalid_rule, quantile_clip, log1p]
+    total_fat_pdv: [invalid_rule, quantile_clip, log1p]
+    sugar_pdv: [invalid_rule, quantile_clip, log1p]
+    sodium_pdv: [invalid_rule, quantile_clip, log1p]
+    protein_pdv: [invalid_rule, quantile_clip, log1p]
+    saturated_fat_pdv: [invalid_rule, quantile_clip, log1p]
+    carbohydrates_pdv: [invalid_rule, quantile_clip, log1p]

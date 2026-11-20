@@ -504,12 +504,301 @@ QUALITY_ISSUES_SCHEMA = Schema(
     description="Data quality issues produced in stage 1.2 for stages 1.3 and 1.4.",
 )
 
-INGREDIENTS_OUTPUT_SCHEMA = Schema(
+IINGREDIENTS_OUTPUT_SCHEMA = Schema(
     name="ingredients_output",
     columns={
         "id": Column("int", nullable=False, unique=True),
         "ingredients": Column("list", nullable=False),
         "ingredients_clean": Column("list", nullable=False),
         "ingredients_filtered": Column("list", nullable=False),
+    },
+    min_rows=1,
+    description="Cleaned and filtered ingredient lists produced in stage 1.5.",
+)
+# --------------------------------------------------------------------------- 1.3 missing
+# Tables of the `missing` stage (recsys.cleaning.missing analysis functions) and the contracts of
+# the data after the 1.3 transformers (used by the 1.9 pipeline).
+
+MISSING_RATES_SCHEMA = Schema(
+    "missing_rates",
+    {
+        "table": Column("str", nullable=False, allowed=frozenset({"recipes", "interactions"})),
+        "column": Column("str", nullable=False),
+        "kind": Column("str", nullable=False, allowed=frozenset({"null", "empty_list", "zero"})),
+        "n_rows": Column("int", nullable=False, min=0),
+        "n_missing": Column("int", nullable=False, min=0),
+        "share": Column("float", min=0.0, max=1.0),
+    },
+    unique_together=(("table", "column", "kind"),),
+    min_rows=1,
+)
+
+RATING_ZERO_REVIEW_STATS_SCHEMA = Schema(
+    "missing_rating_zero_review_stats",
+    {
+        "n_rows": Column("int", nullable=False, min=0),
+        "n_zero": Column("int", nullable=False, min=0),
+        "share_zero": Column("float", min=0.0, max=1.0),
+        "n_zero_with_review": Column("int", nullable=False, min=0),
+        "share_zero_with_review": Column("float", min=0.0, max=1.0),
+        "share_rated_with_review": Column("float", min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+RATING_ZERO_EXAMPLES_SCHEMA = Schema(
+    "missing_rating_zero_examples",
+    {
+        "user_id": Column("int", nullable=False),
+        "recipe_id": Column("int", nullable=False),
+        "date": Column("datetime"),
+        "review": Column("str"),
+    },
+)
+
+MINUTES_ZERO_SUMMARY_SCHEMA = Schema(
+    "missing_minutes_zero_summary",
+    {
+        "n_recipes": Column("int", nullable=False, min=0),
+        "n_minutes_zero": Column("int", nullable=False, min=0),
+        "share_minutes_zero": Column("float", min=0.0, max=1.0),
+        "n_zero_with_no_cook_tag": Column("int", nullable=False, min=0),
+        "share_zero_with_no_cook_tag": Column("float", min=0.0, max=1.0),
+        "share_all_with_no_cook_tag": Column("float", min=0.0, max=1.0),
+        "median_n_steps_zero": Column("float", min=0.0),
+        "median_n_steps_all": Column("float", min=0.0),
+        "median_n_ingredients_zero": Column("float", min=0.0),
+        "median_n_ingredients_all": Column("float", min=0.0),
+    },
+    min_rows=1,
+)
+
+MINUTES_ZERO_TAGS_SCHEMA = Schema(
+    "missing_minutes_zero_tags",
+    {
+        "tag": Column("str", nullable=False, unique=True),
+        "n_zero": Column("int", nullable=False, min=1),
+        "share_in_zero": Column("float", nullable=False, min=0.0, max=1.0),
+        "share_in_all": Column("float", nullable=False, min=0.0, max=1.0),
+        "lift": Column("float", nullable=False, min=0.0),
+    },
+)
+
+MINUTES_ZERO_N_STEPS_SCHEMA = Schema(
+    "missing_minutes_zero_n_steps",
+    {
+        "n_steps": Column("int", nullable=False, unique=True, min=0),
+        "n_zero": Column("int", nullable=False, min=0),
+        "share_zero": Column("float", min=0.0, max=1.0),
+        "n_all": Column("int", nullable=False, min=0),
+        "share_all": Column("float", nullable=False, min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+MINUTES_ZERO_EXAMPLES_SCHEMA = Schema(
+    "missing_minutes_zero_examples",
+    {
+        "id": Column("int", nullable=False, unique=True),
+        "name": Column("str"),
+        "n_steps": Column("int", nullable=False, min=0),
+        "n_ingredients": Column("int", nullable=False, min=0),
+        "tags": Column("str", nullable=False),
+        "first_step": Column("str", nullable=False),
+    },
+)
+
+MAIN_TAG_COVERAGE_SCHEMA = Schema(
+    "missing_main_tag_coverage",
+    {
+        "main_tag": Column("str", nullable=False, unique=True),
+        "n_recipes": Column("int", nullable=False, min=0),
+        "share": Column("float", min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+IMPUTER_GROUPS_SCHEMA = Schema(
+    "missing_imputer_groups",
+    {
+        "group": Column("str", nullable=False, unique=True),
+        "main_tag": Column("str", nullable=False),
+        "n_steps_bin": Column("int", nullable=False, min=0),
+        "n_observed": Column("int", nullable=False, min=1),
+        "median": Column("float", nullable=False),
+        "used": Column("bool", nullable=False),
+    },
+    min_rows=1,
+)
+
+#: object name in the ``missing`` stage -> schema (pass as ``schemas=`` to ArtifactStore.save).
+MISSING_OUTPUT_SCHEMA: Mapping[str, Schema] = {
+    "missing_rates": MISSING_RATES_SCHEMA,
+    "related_issues": QUALITY_ISSUES_SCHEMA,
+    "rating_zero_review_stats": RATING_ZERO_REVIEW_STATS_SCHEMA,
+    "rating_zero_examples": RATING_ZERO_EXAMPLES_SCHEMA,
+    "minutes_zero_summary": MINUTES_ZERO_SUMMARY_SCHEMA,
+    "minutes_zero_tags": MINUTES_ZERO_TAGS_SCHEMA,
+    "minutes_zero_n_steps": MINUTES_ZERO_N_STEPS_SCHEMA,
+    "minutes_zero_examples": MINUTES_ZERO_EXAMPLES_SCHEMA,
+    "main_tag_coverage": MAIN_TAG_COVERAGE_SCHEMA,
+    "imputer_groups": IMPUTER_GROUPS_SCHEMA,
+}
+
+#: Interactions after RatingZeroToNaN: rating is float, 0 no longer allowed.
+INTERACTIONS_AFTER_MISSING_SCHEMA = LOADED_INTERACTIONS_SCHEMA.derive(
+    "interactions_after_missing",
+    add={"rating": Column("float", min=1.0, max=5.0)},
+)
+
+#: Recipes after ZeroAsMissing + GroupMedianImputer(minutes) + mark_has_rating.
+RECIPES_AFTER_MISSING_SCHEMA = LOADED_RECIPES_SCHEMA.derive(
+    "recipes_after_missing",
+    add={
+        "minutes": Column("float", nullable=False, min=0.0),
+        "minutes_was_missing": Column("bool", nullable=False),
+        "has_rating": Column("bool", nullable=False),
+    },
+)
+
+
+# --------------------------------------------------------------------------- 1.4 outliers
+# Tables of the `outliers` stage (recsys.cleaning.outliers analysis functions) and the contract of
+# recipes after the outlier rules (used by the 1.9 pipeline).
+
+OUTLIER_IQR_SCHEMA = Schema(
+    "outliers_iqr",
+    {
+        "column": Column("str", nullable=False),
+        "scale": Column("str", nullable=False, allowed=frozenset({"raw", "log1p"})),
+        "n": Column("int", nullable=False, min=0),
+        "q1": Column("float"),
+        "median": Column("float"),
+        "q3": Column("float"),
+        "iqr": Column("float", min=0.0),
+        "lower_fence": Column("float"),
+        "upper_fence": Column("float"),
+        "whisker_low": Column("float"),
+        "whisker_high": Column("float"),
+        "n_below": Column("int", nullable=False, min=0),
+        "n_above": Column("int", nullable=False, min=0),
+        "share_outside": Column("float", min=0.0, max=1.0),
+        "min": Column("float"),
+        "max": Column("float"),
+    },
+    unique_together=(("column", "scale"),),
+    min_rows=1,
+)
+
+OUTLIER_QUANTILES_SCHEMA = Schema(
+    "outliers_quantiles",
+    {
+        "column": Column("str", nullable=False),
+        "quantile": Column("float", nullable=False, min=0.0, max=1.0),
+        "value": Column("float"),
+    },
+    unique_together=(("column", "quantile"),),
+    min_rows=1,
+)
+
+OUTLIER_THRESHOLDS_SCHEMA = Schema(
+    "outliers_thresholds",
+    {
+        "column": Column("str", nullable=False),
+        "threshold": Column("float", nullable=False),
+        "n_above": Column("int", nullable=False, min=0),
+        "share_above": Column("float", min=0.0, max=1.0),
+    },
+    unique_together=(("column", "threshold"),),
+    min_rows=1,
+)
+
+OUTLIER_EXAMPLES_SCHEMA = Schema(
+    "outliers_extreme_examples",
+    {
+        "id": Column("int", nullable=False),
+        "name": Column("str"),
+        "column": Column("str", nullable=False),
+        "value": Column("float", nullable=False),
+        "n_steps": Column("int", nullable=False, min=0),
+        "n_ingredients": Column("int", nullable=False, min=0),
+    },
+    unique_together=(("column", "id"),),
+)
+
+OUTLIER_INVALID_COUNTS_SCHEMA = Schema(
+    "outliers_invalid_counts",
+    {
+        "column": Column("str", nullable=False, unique=True),
+        "lower": Column("float"),
+        "upper": Column("float"),
+        "n_below": Column("int", nullable=False, min=0),
+        "n_above": Column("int", nullable=False, min=0),
+        "n_invalid": Column("int", nullable=False, min=0),
+        "share_invalid": Column("float", min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+OUTLIER_CLIP_BOUNDS_SCHEMA = Schema(
+    "outliers_clip_bounds",
+    {
+        "column": Column("str", nullable=False, unique=True),
+        "lower_q": Column("float", nullable=False, min=0.0, max=1.0),
+        "upper_q": Column("float", nullable=False, min=0.0, max=1.0),
+        "lower": Column("float", nullable=False),
+        "upper": Column("float", nullable=False),
+        "n_clipped_low": Column("int", nullable=False, min=0),
+        "n_clipped_high": Column("int", nullable=False, min=0),
+    },
+    min_rows=1,
+)
+
+OUTLIER_BEFORE_AFTER_SCHEMA = Schema(
+    "outliers_before_after",
+    {
+        "column": Column("str", nullable=False),
+        "stage": Column("str", nullable=False),
+        "n": Column("int", nullable=False, min=0),
+        "n_missing": Column("int", nullable=False, min=0),
+        "min": Column("float"),
+        "whisker_low": Column("float"),
+        "q1": Column("float"),
+        "median": Column("float"),
+        "q3": Column("float"),
+        "whisker_high": Column("float"),
+        "max": Column("float"),
+        "mean": Column("float"),
+        "skew": Column("float"),
+        "n_outside_fences": Column("int", nullable=False, min=0),
+    },
+    unique_together=(("column", "stage"),),
+    min_rows=1,
+)
+
+#: object name in the ``outliers`` stage -> schema (pass as ``schemas=`` to ArtifactStore.save).
+OUTLIERS_OUTPUT_SCHEMA: Mapping[str, Schema] = {
+    "iqr": OUTLIER_IQR_SCHEMA,
+    "quantiles": OUTLIER_QUANTILES_SCHEMA,
+    "minutes_thresholds": OUTLIER_THRESHOLDS_SCHEMA,
+    "extreme_examples": OUTLIER_EXAMPLES_SCHEMA,
+    "invalid_counts": OUTLIER_INVALID_COUNTS_SCHEMA,
+    "clip_bounds": OUTLIER_CLIP_BOUNDS_SCHEMA,
+    "before_after": OUTLIER_BEFORE_AFTER_SCHEMA,
+    "related_issues": QUALITY_ISSUES_SCHEMA,
+}
+
+#: Upper bound of a valid ``minutes`` value (30 days); mirrors config ``outliers.invalid_rule``.
+MINUTES_VALID_MAX = 43200
+
+#: Recipes after InvalidValueRule + QuantileClipper (original scale, before log1p): value ranges
+#: of the treated columns are checked; NaN marks values removed by the rules (imputed later).
+RECIPES_AFTER_OUTLIERS_SCHEMA = LOADED_RECIPES_SCHEMA.derive(
+    "recipes_after_outliers",
+    add={
+        "minutes": Column("float", min=0.0, max=float(MINUTES_VALID_MAX)),
+        "n_steps": Column("float", min=1.0),
+        "n_ingredients": Column("float", min=1.0),
+        **{c: Column("float", min=0.0) for c in NUTRITION_COLUMNS},
     },
 )

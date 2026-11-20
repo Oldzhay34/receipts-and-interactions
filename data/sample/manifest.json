@@ -1,0 +1,87 @@
+{
+  "format": 1,
+  "stage": "sample",
+  "version": "v1",
+  "created_utc": "2026-11-17T11:19:20+00:00",
+  "recsys_version": "0.1.0",
+  "git": {
+    "commit": "9fea7e65ea09a378cdcd880ce555b32da85649c3",
+    "dirty": false
+  },
+  "params": {
+    "n_recipes": 5000,
+    "stratify_col": "n_ingredients",
+    "random_state": 42
+  },
+  "inputs": [
+    {
+      "kind": "artifact",
+      "stage": "loaded",
+      "version": "v1",
+      "manifest_sha256": "c204225fbdc9b6217e82be8bc4058e91c3ccc40a33be843304116ab0147d60a7"
+    }
+  ],
+  "files": {
+    "recipes": {
+      "kind": "dataframe",
+      "n_rows": 5000,
+      "n_cols": 18,
+      "columns": {
+        "name": "object",
+        "id": "int32",
+        "minutes": "int32",
+        "contributor_id": "int32",
+        "submitted": "datetime64[ns]",
+        "tags": "object",
+        "n_steps": "int16",
+        "steps": "object",
+        "description": "object",
+        "ingredients": "object",
+        "n_ingredients": "int8",
+        "calories": "float64",
+        "total_fat_pdv": "float64",
+        "sugar_pdv": "float64",
+        "sodium_pdv": "float64",
+        "protein_pdv": "float64",
+        "saturated_fat_pdv": "float64",
+        "carbohydrates_pdv": "float64"
+      },
+      "file": "recipes.parquet",
+      "bytes": 2615409,
+      "sha256": "cfa98d7020e3ff6e4125001fe6bcc1377c5a54091d02ac2e976a6b351af89009",
+      "schema": "loaded_recipes"
+    },
+    "interactions": {
+      "kind": "dataframe",
+      "n_rows": 23707,
+      "n_cols": 5,
+      "columns": {
+        "user_id": "int32",
+        "recipe_id": "int32",
+        "date": "datetime64[ns]",
+        "rating": "int8",
+        "review": "object"
+      },
+      "file": "interactions.parquet",
+      "bytes": 4183057,
+      "sha256": "153df7b2d5c25a1f19f5c007481b13889953640725db3221e61f4caa41f603f4",
+      "schema": "loaded_interactions"
+    },
+    "stratification": {
+      "kind": "dataframe",
+      "n_rows": 41,
+      "n_cols": 6,
+      "columns": {
+        "n_ingredients": "int8",
+        "full_count": "int64",
+        "sample_count": "int64",
+        "full_share": "float64",
+        "sample_share": "float64",
+        "share_diff": "float64"
+      },
+      "file": "stratification.parquet",
+      "bytes": 5962,
+      "sha256": "627ab499f7386bf828a8e7ddef0939df12dc5df096ede1b4cac1270fd821b9ba"
+    }
+  }
+}
