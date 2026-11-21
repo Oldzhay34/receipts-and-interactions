@@ -504,7 +504,7 @@ QUALITY_ISSUES_SCHEMA = Schema(
     description="Data quality issues produced in stage 1.2 for stages 1.3 and 1.4.",
 )
 
-IINGREDIENTS_OUTPUT_SCHEMA = Schema(
+INGREDIENTS_OUTPUT_SCHEMA = Schema(
     name="ingredients_output",
     columns={
         "id": Column("int", nullable=False, unique=True),

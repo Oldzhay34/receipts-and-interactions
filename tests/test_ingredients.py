@@ -160,3 +160,11 @@ def test_euclidean_counterexample_on_sparse_binary_ingredients() -> None:
     cosine = CosineDistance()
     assert jaccard.pairwise(query, recipe_a)[0, 0] < jaccard.pairwise(query, recipe_b)[0, 0]
     assert cosine.pairwise(query, recipe_a)[0, 0] < cosine.pairwise(query, recipe_b)[0, 0]
+
+def test_ingredients_output_matches_contract() -> None:
+    from recsys.contracts import INGREDIENTS_OUTPUT_SCHEMA, validate
+
+    df = IngredientNormalizer().fit_transform(_sample_recipes_df())
+    df = RareIngredientFilter(min_count=1).fit(df).transform(df)
+    validate(df[["id", "ingredients", "ingredients_clean", "ingredients_filtered"]],
+             INGREDIENTS_OUTPUT_SCHEMA)
