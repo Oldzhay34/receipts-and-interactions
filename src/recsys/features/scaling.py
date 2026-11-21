@@ -15,6 +15,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from recsys.cleaning.outliers import Log1pTransformer
 from recsys.interfaces import DistanceMetric
+from recsys.registry import register
 
 
 class _Log1pAdapter(BaseEstimator, TransformerMixin):
@@ -43,6 +44,63 @@ class _Log1pAdapter(BaseEstimator, TransformerMixin):
                 )
             df = pd.DataFrame(arr, columns=list(self.inner_.columns))
         return np.asarray(self.inner_.transform(df), dtype=float)
+
+
+class _ColumnScaler(BaseEstimator, TransformerMixin):
+    """Scale only ``columns`` of a DataFrame; every other column is passed through unchanged.
+
+    The scaling statistics are learned in ``fit`` (on TRAIN data in the 1.9 pipeline) and stored
+    in ``scaler_``; ``transform`` only applies them, so a val / test value outside the train range
+    is not refitted (Min-Max can give values < 0 or > 1 there). No log is taken here: the 1.9
+    pipeline applies log1p as its own step before scaling. NaN is ignored in ``fit`` and kept.
+    """
+
+    def __init__(self, columns: tuple[str, ...] | list[str] = ()) -> None:
+        self.columns = columns
+
+    def _make_scaler(self) -> BaseEstimator:
+        raise NotImplementedError
+
+    def _require(self, X: Any) -> list[str]:
+        if not isinstance(X, pd.DataFrame):
+            raise TypeError(f"expected a DataFrame, got {type(X).__name__}")
+        cols = list(self.columns)
+        missing = [c for c in cols if c not in X.columns]
+        if missing:
+            raise KeyError(f"missing required columns: {missing}")
+        return cols
+
+    def fit(self, X: pd.DataFrame, y: Any = None) -> _ColumnScaler:
+        cols = self._require(X)
+        self.scaler_ = self._make_scaler()
+        if cols:
+            self.scaler_.fit(X[cols].astype("float64"))
+        self.n_features_in_ = X.shape[1]
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        check_is_fitted(self, "scaler_")
+        cols = self._require(X)
+        out = X.copy()
+        if cols:
+            out[cols] = self.scaler_.transform(X[cols].astype("float64"))
+        return out
+
+
+@register("scaler", "minmax")
+class MinMaxColumnScaler(_ColumnScaler):
+    """Min-Max scaling of ``columns`` to the train range [0, 1] (registry: scaler / minmax)."""
+
+    def _make_scaler(self) -> BaseEstimator:
+        return MinMaxScaler()
+
+
+@register("scaler", "zscore")
+class ZScoreColumnScaler(_ColumnScaler):
+    """Z-score scaling of ``columns`` with train mean / std (registry: scaler / zscore)."""
+
+    def _make_scaler(self) -> BaseEstimator:
+        return StandardScaler()
 
 
 def _extract_scaling_cfg(cfg: Any) -> dict[str, Any]:

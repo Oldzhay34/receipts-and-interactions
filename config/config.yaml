@@ -217,11 +217,10 @@ pipeline:
       params:
         columns: [minutes, n_steps, calories, total_fat_pdv, sugar_pdv, sodium_pdv,
                   protein_pdv, saturated_fat_pdv, carbohydrates_pdv]
-    # 1.8: no scaler is registered yet (optional step); log1p is already applied above, so the scaler
-    # must not take the log again.
+    # 1.8 scaler (registry kind "scaler": minmax | zscore). log1p is already applied above, so the
+    # scaler does not take the log again.
     - kind: scaler
       name: {ref: scaling.method}
-      optional: true
       params:
         columns: [minutes, n_steps, n_ingredients, calories, total_fat_pdv, sugar_pdv,
                   sodium_pdv, protein_pdv, saturated_fat_pdv, carbohydrates_pdv]

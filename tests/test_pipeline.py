@@ -109,6 +109,7 @@ def test_pipeline_steps_follow_config_order(
         "binner",
         "binner",
         "outlier",
+        "scaler",
     ]
     assert labels["ingredient_steps"] == ["00_ingredients.normalizer", "01_ingredients.rare_filter"]
 
@@ -137,14 +138,23 @@ def test_pipeline_on_fixtures_meets_contracts(repo_cfg, fixture_recipes, fixture
         PreprocessingPipeline.from_config(repo_cfg).transform(fixture_recipes)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="1.8 has no scaler registered under kind 'scaler' yet; the pipeline "
-    "skips that optional step. Remove this mark once B registers it.",
-)
 def test_full_pipeline_has_no_skipped_component(repo_cfg, fixture_recipes, fixture_interactions):
     pipe = _fit(repo_cfg, fixture_recipes, fixture_interactions)
     assert pipe.skipped_steps_ == []
+    assert pipe.step_labels()["recipe_steps"][-1] == "09_scaler.minmax"
+
+
+def test_scaled_train_features_span_unit_range(repo_cfg, sample, sample_split) -> None:
+    recipes, _ = sample
+    pipe = _fit(repo_cfg, recipes, sample_split.train)
+    cols = next(
+        s["params"]["columns"]
+        for s in repo_cfg.section("pipeline")["recipe_steps"]
+        if s["kind"] == "scaler"
+    )
+    train = pipe.transform(recipes[recipes["id"].isin(set(sample_split.train["recipe_id"]))])
+    np.testing.assert_allclose(train[cols].min(), 0.0, atol=1e-12)
+    np.testing.assert_allclose(train[cols].max(), 1.0, atol=1e-12)
 
 
 # ----------------------------------------------------------------- leakage
