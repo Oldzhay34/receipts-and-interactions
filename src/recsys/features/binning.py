@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+import warnings
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from recsys.registry import register
 
 
-def _to_series(X: pd.DataFrame | pd.Series, column: Optional[str]) -> pd.Series:
+def _to_series(X: pd.DataFrame | pd.Series, column: str | None) -> pd.Series:
     if isinstance(X, pd.DataFrame):
         if column is None:
             raise ValueError("`column` must be specified when transforming a DataFrame.")
@@ -23,19 +24,23 @@ def _apply_cut(
     series: pd.Series,
     edges: np.ndarray,
     labels: Sequence[str],
+    right: bool = True,
 ) -> pd.Categorical:
-    """Cut a numeric series using fixed bin edges; out-of-range values fall into outer bins."""
+    """Cut a numeric series using fixed bin edges; out-of-range values fall into outer bins.
+
+    ``right=True`` gives bins ``(a, b]``; ``right=False`` gives ``[a, b)`` (e.g. "quick < 30").
+    """
     extended = np.array(edges, dtype=float).copy()
     extended[0] = -np.inf
     extended[-1] = np.inf
-    return pd.cut(series, bins=extended, labels=list(labels), include_lowest=True)
+    return pd.cut(series, bins=extended, labels=list(labels), include_lowest=True, right=right)
 
 
 def _format_output(
     X: pd.DataFrame | pd.Series,
     binned: pd.Categorical,
-    column: Optional[str],
-    output_col: Optional[str],
+    column: str | None,
+    output_col: str | None,
 ) -> pd.DataFrame | pd.Series:
     if isinstance(X, pd.DataFrame):
         out = X.copy()
@@ -47,21 +52,27 @@ def _format_output(
 
 @register("binner", "domain")
 class DomainBins(BaseEstimator, TransformerMixin):
-    """Domain-knowledge binning with explicit fixed edges and labels."""
+    """Domain-knowledge binning with explicit fixed edges and labels.
+
+    ``right`` chooses which side of an edge is closed: ``True`` -> ``(a, b]`` (an edge value goes
+    to the lower bin), ``False`` -> ``[a, b)`` (it goes to the upper bin, e.g. quick < 30).
+    """
 
     def __init__(
         self,
         column: str,
         edges: Sequence[float],
         labels: Sequence[str],
-        output_col: Optional[str] = None,
+        output_col: str | None = None,
+        right: bool = True,
     ) -> None:
         self.column = column
-        self.edges = list(edges)
-        self.labels = list(labels)
+        self.edges = edges
+        self.labels = labels
         self.output_col = output_col
+        self.right = right
 
-    def fit(self, X: pd.DataFrame | pd.Series, y: Optional[pd.Series] = None) -> "DomainBins":
+    def fit(self, X: pd.DataFrame | pd.Series, y: pd.Series | None = None) -> DomainBins:
         if len(self.edges) != len(self.labels) + 1:
             raise ValueError("`edges` length must equal `len(labels) + 1`.")
         self.edges_ = np.asarray(self.edges, dtype=float)
@@ -70,7 +81,7 @@ class DomainBins(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
         series = _to_series(X, self.column)
-        binned = _apply_cut(series, self.edges_, self.labels_)
+        binned = _apply_cut(series, self.edges_, self.labels_, right=self.right)
         return _format_output(X, binned, self.column, self.output_col)
 
 
@@ -82,15 +93,15 @@ class EqualWidthBins(BaseEstimator, TransformerMixin):
         self,
         column: str,
         n_bins: int = 3,
-        labels: Optional[Sequence[str]] = None,
-        output_col: Optional[str] = None,
+        labels: Sequence[str] | None = None,
+        output_col: str | None = None,
     ) -> None:
         self.column = column
         self.n_bins = n_bins
-        self.labels = list(labels) if labels is not None else None
+        self.labels = labels
         self.output_col = output_col
 
-    def fit(self, X: pd.DataFrame | pd.Series, y: Optional[pd.Series] = None) -> "EqualWidthBins":
+    def fit(self, X: pd.DataFrame | pd.Series, y: pd.Series | None = None) -> EqualWidthBins:
         series = _to_series(X, self.column).dropna()
         if series.empty:
             raise ValueError(f"Column '{self.column}' has no valid numeric values to fit.")
@@ -119,17 +130,15 @@ class EqualFrequencyBins(BaseEstimator, TransformerMixin):
         self,
         column: str,
         n_bins: int = 3,
-        labels: Optional[Sequence[str]] = None,
-        output_col: Optional[str] = None,
+        labels: Sequence[str] | None = None,
+        output_col: str | None = None,
     ) -> None:
         self.column = column
         self.n_bins = n_bins
-        self.labels = list(labels) if labels is not None else None
+        self.labels = labels
         self.output_col = output_col
 
-    def fit(
-        self, X: pd.DataFrame | pd.Series, y: Optional[pd.Series] = None
-    ) -> "EqualFrequencyBins":
+    def fit(self, X: pd.DataFrame | pd.Series, y: pd.Series | None = None) -> EqualFrequencyBins:
         series = _to_series(X, self.column).dropna()
         if series.empty:
             raise ValueError(f"Column '{self.column}' has no valid numeric values to fit.")
@@ -143,6 +152,13 @@ class EqualFrequencyBins(BaseEstimator, TransformerMixin):
         if self.labels is not None and len(self.labels) == n_actual:
             self.labels_ = list(self.labels)
         else:
+            if self.labels is not None:
+                warnings.warn(
+                    f"{self.column}: only {n_actual} distinct quantile bins (tied values), "
+                    f"so the {len(self.labels)} configured labels cannot be used; "
+                    f"falling back to q_0..q_{n_actual - 1}",
+                    stacklevel=2,
+                )
             self.labels_ = [f"q_{i}" for i in range(n_actual)]
         return self
 
