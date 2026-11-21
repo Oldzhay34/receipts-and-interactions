@@ -60,7 +60,7 @@ def test_plot_functions_return_figure_and_do_not_save(tmp_path: Path, monkeypatc
         assert isinstance(fig, Figure)
         plt.close(fig)
 
-    # Plotting functions must never write files directly to disk (Constitution 2-S)
+    # Plotting functions must never write files directly to disk (saving is ArtifactStore's job)
     assert list(tmp_path.iterdir()) == []
 
 

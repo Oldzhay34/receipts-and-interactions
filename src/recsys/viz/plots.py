@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -14,8 +12,8 @@ from recsys.viz.style import FIGSIZE, PALETTE, apply_style
 
 def hist_box(
     series: pd.Series,
-    title: Optional[str] = None,
-    xlabel: Optional[str] = None,
+    title: str | None = None,
+    xlabel: str | None = None,
     bins: int = 40,
     log1p: bool = False,
 ) -> Figure:
@@ -45,7 +43,12 @@ def hist_box(
         patch_artist=True,
         boxprops={"facecolor": PALETTE["secondary"], "alpha": 0.65},
         medianprops={"color": "#111827", "linewidth": 1.8},
-        flierprops={"marker": ".", "markersize": 3, "alpha": 0.4, "markerfacecolor": PALETTE["neutral"]},
+        flierprops={
+            "marker": ".",
+            "markersize": 3,
+            "alpha": 0.4,
+            "markerfacecolor": PALETTE["neutral"],
+        },
     )
     ax_box.set_xlabel(x_label)
     ax_box.set_yticks([])
@@ -59,9 +62,9 @@ def hist_box(
 def bar_counts(
     series: pd.Series,
     top_n: int = 20,
-    title: Optional[str] = None,
+    title: str | None = None,
     xlabel: str = "Count",
-    ylabel: Optional[str] = None,
+    ylabel: str | None = None,
     horizontal: bool = True,
 ) -> Figure:
     """Plot value counts of a categorical/discrete series or pre-exploded items."""
@@ -71,7 +74,9 @@ def bar_counts(
     fig, ax = plt.subplots(figsize=FIGSIZE["bar"])
     if horizontal:
         counts_plot = counts.iloc[::-1]
-        ax.barh(counts_plot.index.astype(str), counts_plot.values, color=PALETTE["primary"], alpha=0.88)
+        ax.barh(
+            counts_plot.index.astype(str), counts_plot.values, color=PALETTE["primary"], alpha=0.88
+        )
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel or str(series.name or "Category"))
     else:
@@ -91,7 +96,7 @@ def scatter_sample(
     n: int = 20_000,
     alpha: float = 0.25,
     random_state: int = 42,
-    title: Optional[str] = None,
+    title: str | None = None,
     log_x: bool = False,
     log_y: bool = False,
 ) -> Figure:
@@ -116,9 +121,9 @@ def scatter_sample(
 
 def corr_heatmap(
     df: pd.DataFrame,
-    cols: Optional[list[str]] = None,
+    cols: list[str] | None = None,
     method: str = "spearman",
-    title: Optional[str] = None,
+    title: str | None = None,
 ) -> Figure:
     """Plot a correlation matrix heatmap with numeric annotations."""
     apply_style()
@@ -153,7 +158,7 @@ def box_by_group(
     value: str,
     group: str,
     top_n_groups: int = 10,
-    title: Optional[str] = None,
+    title: str | None = None,
 ) -> Figure:
     """Plot side-by-side box plots of a numeric value grouped by top categories."""
     apply_style()
@@ -182,7 +187,7 @@ def long_tail_hist(
     counts: pd.Series,
     log: bool = True,
     bins: int = 50,
-    title: Optional[str] = None,
+    title: str | None = None,
     xlabel: str = "Interaction Count",
 ) -> Figure:
     """Plot a long-tail interaction count histogram (optionally with log-scaled axes)."""

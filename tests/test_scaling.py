@@ -81,6 +81,7 @@ def test_compare_scalers_output_columns() -> None:
     assert set(summary["transform"]) == {"raw", "log1p_minmax", "log1p_zscore"}
     assert {"feature", "transform", "min", "median", "mean", "std", "max"}.issubset(summary.columns)
 
+
 def test_log1p_step_really_takes_the_log() -> None:
     X = np.array([[0.0, 9.0], [99.0, 999.0], [9.0, 0.0]])
     scaler = build_numeric_scaler({"method": "minmax", "use_log1p": True})

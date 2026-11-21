@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -131,8 +132,8 @@ class WeightedCombinedDistance:
 
     def pairwise(
         self,
-        A: Tuple[Any, np.ndarray],
-        B: Tuple[Any, np.ndarray],
+        A: tuple[Any, np.ndarray],
+        B: tuple[Any, np.ndarray],
     ) -> np.ndarray:
         A_ing, A_num = A
         B_ing, B_num = B

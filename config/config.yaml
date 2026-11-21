@@ -47,6 +47,8 @@ sample:
   stratify_col: n_ingredients
 
 ingredients:
+  # modifiers: words stripped from ingredient names. "sweet" and "hot" are deliberately absent:
+  # they change the ingredient (sweet potato, hot sauce).
   min_count: 10
   encoding_strategy: "binary"
   modifiers:
@@ -72,7 +74,6 @@ ingredients:
     - virgin
     - cold
     - warm
-    - hot
     - frozen
     - thawed
     - canned
@@ -85,7 +86,6 @@ ingredients:
     - skinless
     - unsalted
     - salted
-    - sweet
     - raw
     - cooked
     - roasted
@@ -102,6 +102,7 @@ binning:
     edges: [0, 30, 60, .inf]
     labels: ["quick", "medium", "long"]
     output_col: minutes_bin
+    right: false          # [a, b): quick < 30, medium 30-59, long >= 60
   calories:
     strategy: equal_frequency
     n_bins: 3
@@ -144,3 +145,10 @@ outliers:
     protein_pdv: [invalid_rule, quantile_clip, log1p]
     saturated_fat_pdv: [invalid_rule, quantile_clip, log1p]
     carbohydrates_pdv: [invalid_rule, quantile_clip, log1p]
+
+# Numeric scaling (1.8): recsys.features.scaling.build_numeric_scaler(cfg.section("scaling")).
+# Fitted on TRAIN data only in the 1.9 pipeline.
+scaling:
+  method: minmax          # minmax | zscore
+  use_log1p: true
+  numeric_weight: 0.2     # WeightedCombinedDistance: share of the numeric distance
