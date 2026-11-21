@@ -802,3 +802,184 @@ RECIPES_AFTER_OUTLIERS_SCHEMA = LOADED_RECIPES_SCHEMA.derive(
         **{c: Column("float", min=0.0) for c in NUTRITION_COLUMNS},
     },
 )
+
+
+# --------------------------------------------------------------------------- 1.9 splits
+# Tables of the `splits` stage and the checks every split must pass before it is written.
+
+SPLIT_NAMES: tuple[str, ...] = ("train", "val", "test")
+
+#: One row per interaction: which set it belongs to. ``row`` = positional row of the split input
+#: (the `loaded` interactions named in the manifest).
+SPLITS_SCHEMA = Schema(
+    "splits",
+    {
+        "row": Column("int", nullable=False, unique=True, min=0),
+        "user_id": Column("int", nullable=False),
+        "recipe_id": Column("int", nullable=False),
+        "split": Column("str", nullable=False, allowed=frozenset(SPLIT_NAMES)),
+    },
+    min_rows=1,
+)
+
+STRATIFICATION_LABELS_SCHEMA = Schema(
+    "splits_stratification_labels",
+    {
+        "recipe_id": Column("int", nullable=False, unique=True),
+        "label": Column("str", nullable=False),
+        "split": Column("str", nullable=False, allowed=frozenset(SPLIT_NAMES)),
+    },
+    min_rows=1,
+)
+
+RECIPE_TARGETS_SCHEMA = Schema(
+    "recipe_targets",
+    {
+        "recipe_id": Column("int", nullable=False, unique=True),
+        "avg_rating": Column("float", nullable=False, min=1.0, max=5.0),
+        "n_ratings": Column("int", nullable=False, min=1),
+        "rating_class": Column("str", nullable=False),
+    },
+    min_rows=1,
+)
+
+SPLIT_SUMMARY_SCHEMA = Schema(
+    "splits_summary",
+    {
+        "strategy": Column("str", nullable=False),
+        "split": Column("str", nullable=False, allowed=frozenset(SPLIT_NAMES)),
+        "n_interactions": Column("int", nullable=False, min=0),
+        "share_interactions": Column("float", min=0.0, max=1.0),
+        "n_recipes": Column("int", nullable=False, min=0),
+        "n_users": Column("int", nullable=False, min=0),
+        "n_rated": Column("int", nullable=False, min=0),
+    },
+    unique_together=(("strategy", "split"),),
+    min_rows=1,
+)
+
+CLASS_BALANCE_SCHEMA = Schema(
+    "splits_class_balance",
+    {
+        "split": Column("str", nullable=False, allowed=frozenset(SPLIT_NAMES)),
+        "label": Column("str", nullable=False),
+        "n_recipes": Column("int", nullable=False, min=0),
+        "share": Column("float", nullable=False, min=0.0, max=1.0),
+    },
+    unique_together=(("split", "label"),),
+    min_rows=1,
+)
+
+DEV_RECIPES_SCHEMA = Schema(
+    "splits_dev_recipes",
+    {
+        "id": Column("int", nullable=False, unique=True),
+        "label": Column("str", nullable=False),
+    },
+    min_rows=1,
+)
+
+RESAMPLING_SUMMARY_SCHEMA = Schema(
+    "splits_resampling_summary",
+    {
+        "method": Column("str", nullable=False),
+        "label": Column("str", nullable=False),
+        "n_rows": Column("int", nullable=False, min=0),
+        "class_weight": Column("float", min=0.0),
+    },
+    unique_together=(("method", "label"),),
+    min_rows=1,
+)
+
+#: Catalogue after the fitted 1.9 pipeline: no missing numeric value is left, bins are set.
+#: Value ranges are not fixed here because the scaler (1.8) decides the final scale.
+RECIPE_FEATURES_SCHEMA = LOADED_RECIPES_SCHEMA.derive(
+    "recipe_features",
+    add={
+        **{
+            c: Column("float", nullable=False)
+            for c in ("minutes", "n_steps", "n_ingredients", *NUTRITION_COLUMNS)
+        },
+        "minutes_was_missing": Column("bool", nullable=False),
+        "n_steps_was_missing": Column("bool", nullable=False),
+        "n_ingredients_was_missing": Column("bool", nullable=False),
+        "minutes_bin": Column("category", nullable=False),
+        "calories_bin": Column("category", nullable=False),
+        "ingredients_clean": Column("list", nullable=False),
+        "ingredients_filtered": Column("list", nullable=False),
+    },
+)
+
+#: object name in the ``splits`` stage -> schema (pass as ``schemas=`` to ArtifactStore.save).
+SPLITS_OUTPUT_SCHEMA: Mapping[str, Schema] = {
+    "recipe_features": RECIPE_FEATURES_SCHEMA,
+    "grouped_assignments": SPLITS_SCHEMA,
+    "temporal_assignments": SPLITS_SCHEMA,
+    "stratification_labels": STRATIFICATION_LABELS_SCHEMA,
+    "targets_train": RECIPE_TARGETS_SCHEMA,
+    "targets_val": RECIPE_TARGETS_SCHEMA,
+    "targets_test": RECIPE_TARGETS_SCHEMA,
+    "split_summary": SPLIT_SUMMARY_SCHEMA,
+    "class_balance": CLASS_BALANCE_SCHEMA,
+    "dev_recipes": DEV_RECIPES_SCHEMA,
+    "resampling_summary": RESAMPLING_SUMMARY_SCHEMA,
+}
+
+
+def assert_rows_preserved(original: pd.DataFrame, frames: Mapping[str, pd.DataFrame]) -> None:
+    """Raise unless ``frames`` partition ``original``: same total rows, every row exactly once.
+
+    Rows are identified by index (splitters keep the positional row of their input).
+    """
+    violations: list[str] = []
+    total = sum(len(f) for f in frames.values())
+    if total != len(original):
+        violations.append(f"{total} rows in {list(frames)} but {len(original)} in the input")
+    indexes = [f.index for f in frames.values()]
+    index = indexes[0].append(indexes[1:]) if indexes else pd.Index([])
+    if index.has_duplicates:
+        violations.append(f"{int(index.duplicated().sum())} rows appear in more than one set")
+    lost = original.index.difference(index)
+    if len(lost):
+        violations.append(f"{len(lost)} input rows are in no set (e.g. {_examples(lost)})")
+    if violations:
+        raise SchemaValidationError("rows_preserved", violations)
+
+
+def assert_temporal_order(
+    frames: Mapping[str, pd.DataFrame], user_col: str = "user_id", date_col: str = "date"
+) -> None:
+    """Raise if, for any user, a later set starts before an earlier set ends.
+
+    ``frames`` is ordered (train, val, test); equal dates are allowed at a boundary.
+    """
+    violations: list[str] = []
+    names = list(frames)
+    for earlier, later in zip(names, names[1:], strict=False):
+        last = frames[earlier].groupby(user_col)[date_col].max()
+        first = frames[later].groupby(user_col)[date_col].min()
+        both = last.index.intersection(first.index)
+        bad = both[(last.loc[both] > first.loc[both]).to_numpy()]
+        if len(bad):
+            violations.append(
+                f"{len(bad)} users have {earlier!r} interactions after their first {later!r} "
+                f"interaction (e.g. {_examples(bad)})"
+            )
+    if violations:
+        raise SchemaValidationError("temporal_order", violations)
+
+
+def assert_class_proportions(
+    labels: pd.DataFrame, tolerance: float, label_col: str = "label", split_col: str = "split"
+) -> None:
+    """Raise if a class share differs between any two sets by more than ``tolerance``."""
+    shares = (
+        labels.groupby(split_col)[label_col].value_counts(normalize=True).unstack(fill_value=0.0)
+    )
+    spread = shares.max(axis=0) - shares.min(axis=0)
+    bad = spread[spread > tolerance]
+    if len(bad):
+        raise SchemaValidationError(
+            "class_proportions",
+            [f"{c}: share differs by {v:.4f} > {tolerance} between sets" for c, v in bad.items()],
+        )
