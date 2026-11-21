@@ -54,6 +54,7 @@ def _count_histogram_modes(values: np.ndarray, bins: int = 20) -> int:
             distinct_peaks[-1] = p
     return len(distinct_peaks)
 
+
 def classify_distribution(series: pd.Series) -> DistributionClassification:
     """Classify a numeric series into a standard distribution shape.
 

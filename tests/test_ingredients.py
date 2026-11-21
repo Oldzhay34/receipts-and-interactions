@@ -160,3 +160,47 @@ def test_euclidean_counterexample_on_sparse_binary_ingredients() -> None:
     cosine = CosineDistance()
     assert jaccard.pairwise(query, recipe_a)[0, 0] < jaccard.pairwise(query, recipe_b)[0, 0]
     assert cosine.pairwise(query, recipe_a)[0, 0] < cosine.pairwise(query, recipe_b)[0, 0]
+
+
+def test_ingredients_output_matches_contract() -> None:
+    from recsys.contracts import INGREDIENTS_OUTPUT_SCHEMA, validate
+
+    df = IngredientNormalizer().fit_transform(_sample_recipes_df())
+    df = RareIngredientFilter(min_count=1).fit(df).transform(df)
+    validate(
+        df[["id", "ingredients", "ingredients_clean", "ingredients_filtered"]],
+        INGREDIENTS_OUTPUT_SCHEMA,
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("sweet potatoes", "sweet potato"),  # "sweet" changes the ingredient
+        ("hot sauce", "hot sauce"),
+        ("black olives", "black olive"),  # -ves -> -ve, not -f
+        ("bay leaves", "bay leaf"),
+        ("cookies", "cookie"),
+        ("cherries", "cherry"),
+        ("almonds", "almond"),  # ordinary plurals merge with the singular
+        ("green beans", "green bean"),
+        ("molasses", "molasses"),
+    ],
+)
+def test_normalizer_keeps_ingredient_identity(raw: str, expected: str) -> None:
+    assert normalize_ingredient(raw) == expected
+
+
+def test_feature_classes_are_registered_and_clonable() -> None:
+    from sklearn.base import clone
+
+    from recsys import registry
+
+    assert registry.get("ingredients", "normalizer") is IngredientNormalizer
+    assert registry.get("ingredients", "rare_filter") is RareIngredientFilter
+    assert registry.get("ingredients", "encoder") is IngredientEncoder
+    assert registry.get("distance", "jaccard") is JaccardDistance
+    assert registry.get("distance", "cosine") is CosineDistance
+    bad = clone(IngredientEncoder(strategy="tfidf")).set_params(strategy="count")
+    with pytest.raises(ValueError, match="Unsupported strategy"):
+        bad.fit(pd.DataFrame({"ingredients_filtered": [["salt"]]}))

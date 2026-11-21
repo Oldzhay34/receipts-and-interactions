@@ -1,5 +1,4 @@
-"""recsys.viz subpackage."""
-"""Visualization style and plotting utilities (Phase 1.6)."""
+"""recsys.viz subpackage: visualization style and plotting utilities (stage 1.6)."""
 
 from recsys.viz.plots import (
     bar_counts,

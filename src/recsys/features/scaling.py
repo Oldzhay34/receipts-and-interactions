@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -10,41 +11,38 @@ from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.utils.validation import check_is_fitted
 
+from recsys.cleaning.outliers import Log1pTransformer
 from recsys.interfaces import DistanceMetric
-from recsys.registry import register
-
-try:
-    from recsys.cleaning.outliers import Log1pTransformer  # type: ignore[import-not-found]
-except ImportError:
-
-    @register("transformer", "log1p_fallback")
-    class Log1pTransformer(BaseEstimator, TransformerMixin):
-        """Fallback log1p transformer when Phase 1.4 is not yet merged."""
-
-        def fit(self, X: Any, y: Optional[Any] = None) -> "Log1pTransformer":
-            return self
-
-        def transform(self, X: Any) -> np.ndarray:
-            arr = np.asarray(X, dtype=float)
-            return np.log1p(np.clip(arr, a_min=0.0, a_max=None))
 
 
 class _Log1pAdapter(BaseEstimator, TransformerMixin):
-    """Wraps 1.4's Log1pTransformer so it accepts both DataFrame and ndarray."""
+    """Apply 1.4's Log1pTransformer to EVERY column of a DataFrame or ndarray.
 
-    def __init__(self) -> None:
-        self._inner = Log1pTransformer()
+    ``Log1pTransformer`` only transforms the columns it is given, so the column list is taken
+    from the fit data (``inner_``). An ndarray passed to ``transform`` must have the same number
+    of columns as the fit data; it is mapped onto the fitted column names.
+    """
 
-    def fit(self, X: Any, y: Optional[Any] = None) -> "_Log1pAdapter":
-        df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-        self._inner.fit(df, y)
+    def fit(self, X: Any, y: Any = None) -> _Log1pAdapter:
+        df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(np.asarray(X, dtype=float))
+        self.inner_ = Log1pTransformer(columns=tuple(df.columns)).fit(df)
+        self.n_features_in_ = df.shape[1]
         return self
 
     def transform(self, X: Any) -> np.ndarray:
-        df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-        out = self._inner.transform(df)
-        return np.asarray(out, dtype=float)
+        check_is_fitted(self, "inner_")
+        if isinstance(X, pd.DataFrame):
+            df = X
+        else:
+            arr = np.asarray(X, dtype=float)
+            if arr.ndim != 2 or arr.shape[1] != self.n_features_in_:
+                raise ValueError(
+                    f"expected {self.n_features_in_} columns, got array of shape {arr.shape}"
+                )
+            df = pd.DataFrame(arr, columns=list(self.inner_.columns))
+        return np.asarray(self.inner_.transform(df), dtype=float)
 
 
 def _extract_scaling_cfg(cfg: Any) -> dict[str, Any]:
@@ -134,8 +132,8 @@ class WeightedCombinedDistance:
 
     def pairwise(
         self,
-        A: Tuple[Any, np.ndarray],
-        B: Tuple[Any, np.ndarray],
+        A: tuple[Any, np.ndarray],
+        B: tuple[Any, np.ndarray],
     ) -> np.ndarray:
         A_ing, A_num = A
         B_ing, B_num = B

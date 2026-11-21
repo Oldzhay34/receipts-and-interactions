@@ -80,3 +80,22 @@ def test_compare_scalers_output_columns() -> None:
     summary = compare_scalers(df, ["minutes", "calories"])
     assert set(summary["transform"]) == {"raw", "log1p_minmax", "log1p_zscore"}
     assert {"feature", "transform", "min", "median", "mean", "std", "max"}.issubset(summary.columns)
+
+
+def test_log1p_step_really_takes_the_log() -> None:
+    X = np.array([[0.0, 9.0], [99.0, 999.0], [9.0, 0.0]])
+    scaler = build_numeric_scaler({"method": "minmax", "use_log1p": True})
+    out = scaler.fit_transform(X)
+    logged = np.log1p(X)
+    expected = (logged - logged.min(axis=0)) / (logged.max(axis=0) - logged.min(axis=0))
+    np.testing.assert_allclose(out, expected)
+    np.testing.assert_allclose(scaler.named_steps["log1p"].transform(X), logged)
+
+
+def test_log1p_step_accepts_dataframe_then_ndarray() -> None:
+    train = pd.DataFrame({"minutes": [10.0, 100.0], "calories": [50.0, 500.0]})
+    step = build_numeric_scaler({"method": "zscore", "use_log1p": True}).named_steps["log1p"]
+    step.fit(train)
+    np.testing.assert_allclose(step.transform(train.to_numpy()), np.log1p(train.to_numpy()))
+    with pytest.raises(ValueError, match="expected 2 columns"):
+        step.transform(np.ones((1, 3)))
