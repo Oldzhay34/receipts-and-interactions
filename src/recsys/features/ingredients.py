@@ -12,6 +12,10 @@ import pandas as pd
 from scipy import sparse
 from sklearn.base import BaseEstimator, TransformerMixin
 
+from recsys.registry import register
+
+#: Words removed from an ingredient name. Words that change WHICH ingredient it is are not here:
+#: "sweet" (sweet potato != potato) and "hot" (hot sauce != sauce, hot pepper != pepper).
 DEFAULT_MODIFIERS: tuple[str, ...] = (
     "fresh",
     "freshly",
@@ -35,7 +39,6 @@ DEFAULT_MODIFIERS: tuple[str, ...] = (
     "virgin",
     "cold",
     "warm",
-    "hot",
     "frozen",
     "thawed",
     "canned",
@@ -48,7 +51,6 @@ DEFAULT_MODIFIERS: tuple[str, ...] = (
     "skinless",
     "unsalted",
     "salted",
-    "sweet",
     "raw",
     "cooked",
     "roasted",
@@ -60,7 +62,8 @@ DEFAULT_MODIFIERS: tuple[str, ...] = (
     "to taste",
 )
 
-# Irregular or sensitive plural endings kept safe from naive stripping
+# Words ending in "s" that are not plurals (stripping the "s" would corrupt them). Ordinary
+# plurals (beans, almonds, raisins, ...) are NOT listed, so "almonds" and "almond" merge.
 _KEEP_S_WORDS: frozenset[str] = frozenset(
     {
         "hummus",
@@ -70,28 +73,24 @@ _KEEP_S_WORDS: frozenset[str] = frozenset(
         "oats",
         "grits",
         "greens",
-        "lentils",
-        "noodles",
-        "beans",
-        "peas",
-        "chives",
-        "capers",
-        "cloves",
-        "raisins",
-        "almonds",
-        "walnuts",
-        "pecans",
-        "peanuts",
-        "breadcrumbs",
-        "cornflakes",
         "citrus",
         "swiss",
         "bass",
         "watercress",
         "lemongrass",
-        "applesauce",
+        "brussels",
+        "schnapps",
     }
 )
+
+# "-ves" plurals whose singular ends in "-f" (leaves -> leaf); every other "-ves" word just loses
+# the "s" (olives -> olive, chives -> chive).
+_VES_TO_F: frozenset[str] = frozenset(
+    {"leaves", "halves", "loaves", "calves", "knives", "shelves", "wolves"}
+)
+
+# "-ies" plurals whose singular ends in "-ie" (cookies -> cookie); others become "-y".
+_IES_TO_IE: frozenset[str] = frozenset({"cookies", "brownies", "veggies", "smoothies", "pierogies"})
 
 _PUNCT_RE = re.compile(r"[^a-z0-9\s]+")
 _SPACE_RE = re.compile(r"\s+")
@@ -102,9 +101,9 @@ def _singularize_token(token: str) -> str:
     if len(token) <= 3 or token in _KEEP_S_WORDS:
         return token
     if token.endswith("ies") and len(token) > 4:
-        return token[:-3] + "y"
+        return token[:-1] if token in _IES_TO_IE else token[:-3] + "y"
     if token.endswith("ves") and len(token) > 4:
-        return token[:-3] + "f"
+        return token[:-3] + "f" if token in _VES_TO_F else token[:-1]
     if token.endswith(("ches", "shes", "xes", "zes", "oes")) and len(token) > 4:
         return token[:-2]
     if token.endswith("s") and not token.endswith(("ss", "us", "is")):
@@ -136,6 +135,7 @@ def normalize_ingredient(text: str, modifiers: Iterable[str] = DEFAULT_MODIFIERS
     return " ".join(singularized).strip()
 
 
+@register("ingredients", "normalizer")
 class IngredientNormalizer(BaseEstimator, TransformerMixin):
     """Sklearn-compatible transformer normalizing recipe ingredient lists.
 
@@ -208,10 +208,7 @@ def normalization_summary(
 
     if clean_col in df.columns:
         clean_unique = {
-            ing
-            for lst in df[clean_col]
-            if isinstance(lst, (list, tuple, set))
-            for ing in lst
+            ing for lst in df[clean_col] if isinstance(lst, (list, tuple, set)) for ing in lst
         }
 
     summary_df = pd.DataFrame(
@@ -266,14 +263,13 @@ def rare_threshold_coverage_table(
                 "min_count": int(thr),
                 "vocab_size": len(kept),
                 "vocab_retained_pct": round(100.0 * len(kept) / max(total_unique, 1), 2),
-                "occurrence_coverage_pct": round(
-                    100.0 * kept_occ / max(total_occurrences, 1), 2
-                ),
+                "occurrence_coverage_pct": round(100.0 * kept_occ / max(total_occurrences, 1), 2),
             }
         )
     return pd.DataFrame(rows)
 
 
+@register("ingredients", "rare_filter")
 class RareIngredientFilter(BaseEstimator, TransformerMixin):
     """Filter out rare ingredients whose frequency in training data is below `min_count`."""
 
@@ -295,9 +291,7 @@ class RareIngredientFilter(BaseEstimator, TransformerMixin):
             if isinstance(items, (list, tuple, set)):
                 counts.update(items)
         self.counts_: Counter[str] = counts
-        self.vocab_: list[str] = sorted(
-            ing for ing, cnt in counts.items() if cnt >= self.min_count
-        )
+        self.vocab_: list[str] = sorted(ing for ing, cnt in counts.items() if cnt >= self.min_count)
         self._vocab_set_: frozenset[str] = frozenset(self.vocab_)
         return self
 
@@ -314,6 +308,7 @@ class RareIngredientFilter(BaseEstimator, TransformerMixin):
         return df
 
 
+@register("ingredients", "encoder")
 class IngredientEncoder(BaseEstimator, TransformerMixin):
     """Encode ingredient lists into a CSR sparse matrix (`binary` or `tfidf`)."""
 
@@ -323,13 +318,13 @@ class IngredientEncoder(BaseEstimator, TransformerMixin):
         input_col: str = "ingredients_filtered",
         min_count: int = 1,
     ) -> None:
-        if strategy not in ("binary", "tfidf"):
-            raise ValueError(f"Unsupported strategy: {strategy!r}. Use 'binary' or 'tfidf'.")
         self.strategy = strategy
         self.input_col = input_col
         self.min_count = min_count
 
     def fit(self, X: pd.DataFrame, y: object = None) -> IngredientEncoder:
+        if self.strategy not in ("binary", "tfidf"):
+            raise ValueError(f"Unsupported strategy: {self.strategy!r}. Use 'binary' or 'tfidf'.")
         if self.input_col not in X.columns:
             raise KeyError(f"Missing required column: {self.input_col}")
         df_counts: Counter[str] = Counter()
@@ -341,9 +336,7 @@ class IngredientEncoder(BaseEstimator, TransformerMixin):
         self.vocab_: list[str] = sorted(
             ing for ing, cnt in df_counts.items() if cnt >= self.min_count
         )
-        self.vocab_to_idx_: dict[str, int] = {
-            ing: idx for idx, ing in enumerate(self.vocab_)
-        }
+        self.vocab_to_idx_: dict[str, int] = {ing: idx for idx, ing in enumerate(self.vocab_)}
         if self.strategy == "tfidf":
             doc_freq = np.array([df_counts[ing] for ing in self.vocab_], dtype=np.float64)
             # Smooth IDF: log((1 + n) / (1 + df)) + 1

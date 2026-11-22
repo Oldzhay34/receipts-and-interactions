@@ -47,6 +47,8 @@ sample:
   stratify_col: n_ingredients
 
 ingredients:
+  # modifiers: words stripped from ingredient names. "sweet" and "hot" are deliberately absent:
+  # they change the ingredient (sweet potato, hot sauce).
   min_count: 10
   encoding_strategy: "binary"
   modifiers:
@@ -72,7 +74,6 @@ ingredients:
     - virgin
     - cold
     - warm
-    - hot
     - frozen
     - thawed
     - canned
@@ -85,7 +86,6 @@ ingredients:
     - skinless
     - unsalted
     - salted
-    - sweet
     - raw
     - cooked
     - roasted
@@ -102,6 +102,7 @@ binning:
     edges: [0, 30, 60, .inf]
     labels: ["quick", "medium", "long"]
     output_col: minutes_bin
+    right: false          # [a, b): quick < 30, medium 30-59, long >= 60
   calories:
     strategy: equal_frequency
     n_bins: 3
@@ -144,3 +145,97 @@ outliers:
     protein_pdv: [invalid_rule, quantile_clip, log1p]
     saturated_fat_pdv: [invalid_rule, quantile_clip, log1p]
     carbohydrates_pdv: [invalid_rule, quantile_clip, log1p]
+
+# Numeric scaling (1.8): recsys.features.scaling.build_numeric_scaler(cfg.section("scaling")).
+# Fitted on TRAIN data only in the 1.9 pipeline.
+scaling:
+  method: minmax          # minmax | zscore
+  use_log1p: true
+  numeric_weight: 0.2     # WeightedCombinedDistance: share of the numeric distance
+
+# Splits (1.9). RAW_recipes is never split; RAW_interactions is split two ways. Ratios: `split`.
+splits:
+  stratify_unrated_label: unrated   # stratification class of recipes without any rating > 0
+  class_share_tolerance: 0.01       # max |class share difference| between train / val / test
+  temporal:
+    min_interactions: 5             # users with fewer interactions stay entirely in train
+    n_val: 1                        # last-but-n_test interactions -> val
+    n_test: 1                       # latest interactions -> test
+  dev_sample:
+    n_recipes: 30000                # stratified on the stratification class
+
+# Preprocessing pipeline (1.9): steps are built from the registry (kind / name) in this order and
+# fitted on TRAIN data only. A value {ref: a.b.c} is read from that path of this file, so the
+# pipeline reuses the 1.3-1.8 blocks instead of copying them. `optional: true` = skip (and record
+# the skip) when the registry has no such component yet.
+pipeline:
+  interaction_steps:
+    - {kind: missing, name: rating_zero_to_nan, params: {column: rating}}
+  target:                  # recipe targets; the class binner is fitted on train avg_rating only
+    kind: targets
+    name: recipe
+    params:
+      class_col: {ref: binning.avg_rating.output_col}
+      binner:                # a nested step: built from the registry too
+        kind: binner
+        name: {ref: binning.avg_rating.strategy}
+        params:
+          column: avg_rating
+          edges: {ref: binning.avg_rating.edges}
+          labels: {ref: binning.avg_rating.labels}
+          output_col: {ref: binning.avg_rating.output_col}
+  recipe_steps:
+    - {kind: missing, name: zero_as_missing, params: {columns: [minutes]}}
+    - {kind: outlier, name: invalid_rule, params: {bounds: {ref: outliers.invalid_rule}}}
+    - {kind: imputer, name: group_median, params: {target_col: minutes, steps_col: n_steps}}
+    - {kind: imputer, name: group_median, params: {target_col: n_steps, steps_col: n_ingredients}}
+    - {kind: imputer, name: group_median, params: {target_col: n_ingredients, steps_col: n_steps}}
+    - kind: outlier
+      name: quantile_clip
+      params:
+        columns: [minutes, n_steps, n_ingredients, calories, total_fat_pdv, sugar_pdv,
+                  sodium_pdv, protein_pdv, saturated_fat_pdv, carbohydrates_pdv]
+        lower_q: {ref: outliers.quantile_clip.lower_q}
+        upper_q: {ref: outliers.quantile_clip.upper_q}
+    - kind: binner
+      name: {ref: binning.minutes.strategy}
+      params:
+        column: minutes
+        edges: {ref: binning.minutes.edges}
+        labels: {ref: binning.minutes.labels}
+        output_col: {ref: binning.minutes.output_col}
+        right: {ref: binning.minutes.right}
+    - kind: binner
+      name: {ref: binning.calories.strategy}
+      params:
+        column: calories
+        n_bins: {ref: binning.calories.n_bins}
+        labels: {ref: binning.calories.labels}
+        output_col: {ref: binning.calories.output_col}
+    - kind: outlier
+      name: log1p
+      params:
+        columns: [minutes, n_steps, calories, total_fat_pdv, sugar_pdv, sodium_pdv,
+                  protein_pdv, saturated_fat_pdv, carbohydrates_pdv]
+    # 1.8 scaler (registry kind "scaler": minmax | zscore). log1p is already applied above, so the
+    # scaler does not take the log again.
+    - kind: scaler
+      name: {ref: scaling.method}
+      params:
+        columns: [minutes, n_steps, n_ingredients, calories, total_fat_pdv, sugar_pdv,
+                  sodium_pdv, protein_pdv, saturated_fat_pdv, carbohydrates_pdv]
+  ingredient_steps:
+    - kind: ingredients
+      name: normalizer
+      params: {modifiers: {ref: ingredients.modifiers}}
+    - kind: ingredients
+      name: rare_filter
+      params: {min_count: {ref: ingredients.min_count}}
+  ingredient_encoder:
+    kind: ingredients
+    name: encoder
+    params: {strategy: {ref: ingredients.encoding_strategy}}
+
+# Class imbalance (1.9): applied to TRAIN only (recsys.imbalance.resampling).
+resampling:
+  strategy: none            # none | random_under | random_over (class weights are always reported)

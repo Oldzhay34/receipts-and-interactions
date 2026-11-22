@@ -80,3 +80,49 @@ def test_compare_scalers_output_columns() -> None:
     summary = compare_scalers(df, ["minutes", "calories"])
     assert set(summary["transform"]) == {"raw", "log1p_minmax", "log1p_zscore"}
     assert {"feature", "transform", "min", "median", "mean", "std", "max"}.issubset(summary.columns)
+
+
+def test_log1p_step_really_takes_the_log() -> None:
+    X = np.array([[0.0, 9.0], [99.0, 999.0], [9.0, 0.0]])
+    scaler = build_numeric_scaler({"method": "minmax", "use_log1p": True})
+    out = scaler.fit_transform(X)
+    logged = np.log1p(X)
+    expected = (logged - logged.min(axis=0)) / (logged.max(axis=0) - logged.min(axis=0))
+    np.testing.assert_allclose(out, expected)
+    np.testing.assert_allclose(scaler.named_steps["log1p"].transform(X), logged)
+
+
+def test_log1p_step_accepts_dataframe_then_ndarray() -> None:
+    train = pd.DataFrame({"minutes": [10.0, 100.0], "calories": [50.0, 500.0]})
+    step = build_numeric_scaler({"method": "zscore", "use_log1p": True}).named_steps["log1p"]
+    step.fit(train)
+    np.testing.assert_allclose(step.transform(train.to_numpy()), np.log1p(train.to_numpy()))
+    with pytest.raises(ValueError, match="expected 2 columns"):
+        step.transform(np.ones((1, 3)))
+
+
+def test_column_scalers_learn_on_fit_data_only() -> None:
+    from sklearn.base import clone
+
+    from recsys import registry
+
+    train = pd.DataFrame({"a": [0.0, 5.0, 10.0], "b": [1.0, 2.0, 3.0], "keep": ["x", "y", "z"]})
+    val = pd.DataFrame({"a": [20.0, -10.0], "b": [2.0, 2.0], "keep": ["u", "v"]})
+
+    mm = registry.create("scaler", "minmax", columns=["a", "b"]).fit(train)
+    out = mm.transform(val)
+    np.testing.assert_allclose(out["a"], [2.0, -1.0])  # train range, not refitted on val
+    assert out["keep"].tolist() == ["u", "v"]  # other columns untouched
+    np.testing.assert_allclose(mm.transform(train)[["a", "b"]].to_numpy().min(axis=0), 0.0)
+
+    zs = registry.create("scaler", "zscore", columns=["a"]).fit(train)
+    np.testing.assert_allclose(zs.transform(train)["a"].mean(), 0.0, atol=1e-12)
+    assert zs.scaler_.mean_[0] == pytest.approx(5.0)
+    zs.transform(val)
+    assert zs.scaler_.mean_[0] == pytest.approx(5.0)
+
+    assert clone(mm).get_params() == {"columns": ["a", "b"]}
+    with pytest.raises(KeyError):
+        mm.transform(val.drop(columns="a"))
+    with pytest.raises(TypeError):
+        registry.create("scaler", "minmax", columns=["a"]).fit(train.to_numpy())

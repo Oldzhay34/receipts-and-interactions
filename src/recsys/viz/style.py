@@ -1,4 +1,4 @@
-"""Unified matplotlib visual style for all project figures (Constitution 4.6)."""
+"""Unified matplotlib visual style for all project figures (single style source)."""
 
 from __future__ import annotations
 

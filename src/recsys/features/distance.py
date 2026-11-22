@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 from scipy import sparse
 
+from recsys.registry import register
+
 
 def _to_csr(matrix: np.ndarray | sparse.spmatrix) -> sparse.csr_matrix:
     if sparse.issparse(matrix):
@@ -12,6 +14,7 @@ def _to_csr(matrix: np.ndarray | sparse.spmatrix) -> sparse.csr_matrix:
     return sparse.csr_matrix(np.asarray(matrix, dtype=np.float32))
 
 
+@register("distance", "jaccard")
 class JaccardDistance:
     """Pairwise Jaccard distance for binary/sparse matrices (DistanceMetric Protocol)."""
 
@@ -33,6 +36,7 @@ class JaccardDistance:
         return np.clip(1.0 - sim, 0.0, 1.0).astype(np.float32)
 
 
+@register("distance", "cosine")
 class CosineDistance:
     """Pairwise Cosine distance for sparse/dense matrices (DistanceMetric Protocol)."""
 
