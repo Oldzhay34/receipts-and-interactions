@@ -239,3 +239,17 @@ pipeline:
 # Class imbalance (1.9): applied to TRAIN only (recsys.imbalance.resampling).
 resampling:
   strategy: none            # none | random_under | random_over (class weights are always reported)
+
+# kNN prototype (1.10). Ingredient distance only (4.5: Jaccard / cosine, never Euclidean).
+# Untuned prototype values: k and the metric are tuned on validation in P2.
+knn_prototype:
+  metric: jaccard               # registry kind "distance": jaccard | cosine
+  n_neighbors: 15               # rating-class kNN (uniform and distance-weighted)
+  rating_neighbors: 10          # neighbours of the rating estimate for unrated recipes
+  distance_eps: 1.0e-6          # weight 1 / (d + eps) keeps identical ingredient sets finite
+  batch_size: 512               # query rows per distance block
+  top_k: 5                      # results per example query
+  example_queries:
+    - {id: q1, ingredients: [chicken, garlic, lemon]}
+    - {id: q2, ingredients: [flour, sugar, butter, eggs]}
+    - {id: q3, ingredients: [tomatoes, basil, mozzarella, olive oil], filters: {minutes_bin: quick}}

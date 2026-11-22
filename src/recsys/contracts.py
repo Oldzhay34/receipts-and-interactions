@@ -983,3 +983,75 @@ def assert_class_proportions(
             "class_proportions",
             [f"{c}: share differs by {v:.4f} > {tolerance} between sets" for c, v in bad.items()],
         )
+
+
+# --------------------------------------------------------------------------- 1.10 kNN prototype
+# Tables of the `knn_prototype` stage. Only train / val may appear: the test set is never scored
+# in Phase 1 (recsys.evaluation.metrics.check_split).
+
+_EVAL_SPLITS = frozenset({"train", "val"})
+
+KNN_CLASSIFICATION_METRICS_SCHEMA = Schema(
+    "knn_classification_metrics",
+    {
+        "model": Column("str", nullable=False, unique=True),
+        "split": Column("str", nullable=False, allowed=_EVAL_SPLITS),
+        "n_recipes": Column("int", nullable=False, min=1),
+        "accuracy": Column("float", nullable=False, min=0.0, max=1.0),
+        "balanced_accuracy": Column("float", nullable=False, min=0.0, max=1.0),
+        "macro_f1": Column("float", nullable=False, min=0.0, max=1.0),
+    },
+    min_rows=1,
+)
+
+KNN_REGRESSION_METRICS_SCHEMA = Schema(
+    "knn_regression_metrics",
+    {
+        "model": Column("str", nullable=False, unique=True),
+        "split": Column("str", nullable=False, allowed=_EVAL_SPLITS),
+        "n_recipes": Column("int", nullable=False, min=1),
+        "mae": Column("float", nullable=False, min=0.0),
+        "rmse": Column("float", nullable=False, min=0.0),
+    },
+    min_rows=1,
+)
+
+KNN_CONFUSION_SCHEMA = Schema(
+    "knn_confusion_matrices",
+    {
+        "model": Column("str", nullable=False),
+        "true_label": Column("str", nullable=False),
+        "pred_label": Column("str", nullable=False),
+        "count": Column("int", nullable=False, min=0),
+    },
+    unique_together=(("model", "true_label", "pred_label"),),
+    min_rows=1,
+)
+
+KNN_EXAMPLE_RECOMMENDATIONS_SCHEMA = Schema(
+    "knn_example_recommendations",
+    {
+        "query_id": Column("str", nullable=False),
+        "query": Column("str", nullable=False),
+        "filters": Column("str", nullable=False),
+        "rank": Column("int", nullable=False, min=1),
+        "recipe_id": Column("int", nullable=False),
+        "name": Column("str", nullable=False),
+        "similarity": Column("float", nullable=False, min=0.0, max=1.0),
+        "predicted_rating": Column("float", nullable=False, min=1.0, max=5.0),
+        "rating_is_estimated": Column("bool", nullable=False),
+        "minutes": Column("float"),
+        "minutes_bin": Column("str", nullable=False),
+        "matched_ingredients": Column("str", nullable=False),
+        "unknown_ingredients": Column("str", nullable=False),
+    },
+    unique_together=(("query_id", "rank"),),
+)
+
+#: object name in the ``knn_prototype`` stage -> schema.
+KNN_PROTOTYPE_OUTPUT_SCHEMA: Mapping[str, Schema] = {
+    "classification_metrics": KNN_CLASSIFICATION_METRICS_SCHEMA,
+    "regression_metrics": KNN_REGRESSION_METRICS_SCHEMA,
+    "confusion_matrices": KNN_CONFUSION_SCHEMA,
+    "example_recommendations": KNN_EXAMPLE_RECOMMENDATIONS_SCHEMA,
+}
