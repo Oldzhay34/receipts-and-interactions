@@ -788,8 +788,8 @@ OUTLIERS_OUTPUT_SCHEMA: Mapping[str, Schema] = {
     "related_issues": QUALITY_ISSUES_SCHEMA,
 }
 
-#: Upper bound of a valid ``minutes`` value (30 days); mirrors config ``outliers.invalid_rule``.
-MINUTES_VALID_MAX = 43200
+#: Upper bound of a valid ``minutes`` value (1 year); mirrors config ``outliers.invalid_rule``.
+MINUTES_VALID_MAX = 525600
 
 #: Recipes after InvalidValueRule + QuantileClipper (original scale, before log1p): value ranges
 #: of the treated columns are checked; NaN marks values removed by the rules (imputed later).

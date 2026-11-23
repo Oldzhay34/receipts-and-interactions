@@ -257,7 +257,7 @@ def before_after_table(
 class InvalidValueRule(BaseEstimator, TransformerMixin):
     """Turn values outside the valid range into NaN (``bounds``: column -> [lower, upper]).
 
-    Bounds are domain rules (e.g. ``n_steps >= 1``, ``minutes <= 30 days``), not learned from data,
+    Bounds are domain rules (e.g. ``n_steps >= 1``, ``minutes <= 1 year``), not learned from data,
     so the transformer is stateless. Rows are never dropped; what happens to the NaN (imputation or
     exclusion) is decided by later steps.
     """
@@ -393,7 +393,7 @@ def outlier_steps_from_config(block: Mapping[str, Any]) -> list[tuple[str, Any]]
 
     ``block`` is ``cfg.section("outliers")``::
 
-        invalid_rule: {minutes: [null, 43200], n_steps: [1, null], ...}
+        invalid_rule: {minutes: [0, 525600], n_steps: [1, null], ...}
         quantile_clip: {lower_q: 0.0, upper_q: 0.99}
         columns: {minutes: [invalid_rule, quantile_clip, log1p], ...}
 

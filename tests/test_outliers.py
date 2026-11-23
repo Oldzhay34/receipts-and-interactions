@@ -133,14 +133,21 @@ def test_analysis_functions_do_not_mutate_inputs(fixture_recipes) -> None:
 
 
 def test_invalid_rule_sets_nan_and_keeps_rows() -> None:
-    df = pd.DataFrame({"minutes": [10, 50000, 0], "n_steps": [0, 3, 5], "other": [1, 2, 3]})
-    out = InvalidValueRule({"minutes": [0, 43200], "n_steps": [1, None]}).fit_transform(df)
+    df = pd.DataFrame({"minutes": [10, 600000, 0], "n_steps": [0, 3, 5], "other": [1, 2, 3]})
+    out = InvalidValueRule({"minutes": [0, 525600], "n_steps": [1, None]}).fit_transform(df)
     assert len(out) == 3
     assert out["minutes"].tolist()[:1] == [10.0] and np.isnan(out["minutes"].iloc[1])
     assert out["minutes"].iloc[2] == 0.0  # bounds are inclusive
     assert np.isnan(out["n_steps"].iloc[0]) and out["n_steps"].iloc[1] == 3.0
     pd.testing.assert_series_equal(out["other"], df["other"])
-    assert df["minutes"].tolist() == [10, 50000, 0]  # input not modified
+    assert df["minutes"].tolist() == [10, 600000, 0]  # input not modified
+
+
+def test_configured_minutes_bound_keeps_long_infusions(outliers_block) -> None:
+    """Months-long liqueurs / extracts are real; only placeholders and joke values are invalid."""
+    df = pd.DataFrame({"minutes": [129610.0, 288000.0, 1051200.0, 2147483647.0]})
+    out = InvalidValueRule({"minutes": outliers_block["invalid_rule"]["minutes"]}).fit_transform(df)
+    assert out["minutes"].notna().tolist() == [True, True, False, False]
 
 
 @pytest.mark.parametrize(
