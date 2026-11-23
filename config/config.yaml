@@ -116,12 +116,13 @@ binning:
 # Outlier treatment (1.4). `columns` lists the strategies applied to each column; they always
 # run in the order invalid_rule -> quantile_clip -> log1p (recsys.cleaning.outliers.STEP_ORDER).
 # invalid_rule: domain bounds [lower, upper] (null = no bound); values outside become NaN.
-#   minutes upper = 30 days in minutes: longer values are data-entry errors, not recipes.
+#   minutes upper = 1 year (525600 min): only longer values are impossible (placeholders such as
+#   2147483647, joke recipes); infusions / liqueurs of 3-6 months are real and are clipped instead.
 # quantile_clip: bounds learned from TRAIN data only (1.9 pipeline).
 # log1p: only for columns still strongly right-skewed (skew > 1) after clipping.
 outliers:
   invalid_rule:
-    minutes: [0, 43200]
+    minutes: [0, 525600]
     n_steps: [1, null]
     n_ingredients: [1, null]
     calories: [0, null]
