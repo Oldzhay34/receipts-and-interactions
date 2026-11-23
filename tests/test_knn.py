@@ -39,6 +39,7 @@ from recsys.models.knn import (
     catalogue_table,
     example_recommendations,
     nearest_neighbors,
+    query_vectorizer_from_pipeline,
     recipe_rating_dataset,
 )
 
@@ -194,6 +195,40 @@ def test_catalogue_table_uses_raw_minutes() -> None:
     out = catalogue_table(feats, CATALOGUE[["id", "minutes"]])
     assert out["minutes"].tolist()[:3] == [40.0, 20.0, 45.0]
     assert out["id"].tolist() == CATALOGUE["id"].tolist()
+
+
+def test_catalogue_table_hides_minutes_the_pipeline_treated_as_missing() -> None:
+    raw = pd.DataFrame({"id": [10, 20, 30], "minutes": [2147483647.0, 0.0, 45.0]})
+    feats = CATALOGUE.iloc[:3].assign(
+        minutes=[0.4, 0.4, 0.5], minutes_was_missing=[True, True, False]
+    )
+    out = catalogue_table(feats, raw)
+    assert out["minutes"].isna().tolist() == [True, True, False]  # invalid / 0 -> unknown
+    assert out["minutes"].iloc[2] == 45.0
+    assert out["minutes_bin"].tolist() == ["medium", "quick", "medium"]  # filter still works
+
+
+def test_invalid_minutes_never_reach_a_recommendation(fixture_recipes, fixture_interactions):
+    """End to end on the fixtures: 106 (int32 max), 107 (two years), 103 / 105 (zero)."""
+    from recsys.config import load_config
+    from recsys.pipeline.build import PreprocessingPipeline
+
+    cfg = load_config(data_root=REPO_ROOT)
+    cfg.raw["ingredients"]["min_count"] = 1  # tiny fixture vocab
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pipe = PreprocessingPipeline.from_config(cfg).fit(fixture_recipes, fixture_interactions)
+    feats = pipe.transform(fixture_recipes)
+    cat = catalogue_table(feats, fixture_recipes)
+    rec = KNNRecipeRecommender(query_vectorizer_from_pipeline(pipe)).fit(
+        cat, fixture_interactions, ingredient_matrix=pipe.encode(feats)
+    )
+    shown = {}
+    for q in (["salt"], ["garlic", "salt"], ["flour", "sugar"]):
+        shown.update({r.recipe_id: r.minutes for r in rec.recommend(q, k=20)})
+    bad = {rid: m for rid, m in shown.items() if m is not None and not 0 < m <= 43200}
+    assert not bad, bad
+    assert {103, 105, 106, 107} & set(shown)  # the invalid recipes were actually recommended
 
 
 # --------------------------------------------------------------------------- recommender

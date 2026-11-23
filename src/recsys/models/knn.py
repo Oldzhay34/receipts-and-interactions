@@ -590,11 +590,19 @@ def catalogue_table(
     """Recommender catalogue: the 1.9 features (row order = ingredient matrix rows) with the RAW
     ``minutes`` of the ``loaded`` recipes, because the feature column is log-scaled.
 
+    Raw minutes that the 1.9 pipeline treated as missing (``minutes_was_missing``: 0 or outside
+    the valid range, e.g. 2147483647) are NOT shown: they become NaN, i.e. ``minutes=None`` in a
+    recommendation ("unknown"). ``minutes_bin`` still comes from the imputed value, so the filter
+    keeps working for those recipes.
+
     Returns:
-        Columns id, name, minutes (raw, may be NaN), minutes_bin, ``ingredient_col``; same rows
-        and order as ``features``.
+        Columns id, name, minutes (raw; NaN if unknown or invalid), minutes_bin,
+        ``ingredient_col``; same rows and order as ``features``.
     """
     raw = raw_recipes.set_index("id")["minutes"]
     out = features[["id", "name", "minutes_bin", ingredient_col]].copy()
     out["minutes"] = out["id"].map(raw).astype("float64")
+    if "minutes_was_missing" in features.columns:
+        invalid = features["minutes_was_missing"].fillna(False).astype(bool).to_numpy()
+        out.loc[invalid, "minutes"] = np.nan
     return out.reset_index(drop=True)
