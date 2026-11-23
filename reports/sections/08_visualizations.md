@@ -1,13 +1,19 @@
-# 8. Visualizations and Distribution Types
+# Visualizations and Distribution Analysis
 
-Source: `figures/v1` (`distribution_summary.parquet`, 10 features; figure PNGs). Scaling figures are in `scaling/v1` (`fig_08_*`). The scatter plots use a sample of 20,000 rows; the correlation heatmap uses Spearman.
+All figures use one shared style (font, palette, 150 dpi) and are produced by plotting functions
+that return a figure without saving it; the figures are then written together as one versioned
+set <!-- src: outputs/figures/v1/manifest.json (30 figure files, inputs loaded v1) -->. They are
+drawn from the loaded data, before any cleaning, so they show the problems that the later stages
+address. Histograms, box plots, bar plots, scatter plots and a heat map are used; kernel density
+and Q–Q plots are not.
 
-## 8.1 Figure inventory
+## Distribution type of every numeric feature
 
-- Loaded-stage figures (`figures/v1`, 30 files, dpi 150): `fig_06_01` to `fig_06_30`. These cover minutes, n_steps, n_ingredients, calories, the %PDV nutrient columns, rating counts, top-20 ingredients and tags, long-tail plots for users and recipes, three scatter plots (ingredients vs minutes, calories vs rating, steps vs rating), a Spearman correlation heatmap (`fig_06_29`), and a box plot of rating by tag (`fig_06_30`).
-- Scaling-stage figures (`scaling/v1`, 5 files): `fig_08_01` to `fig_08_05`, comparing raw and transformed calories and minutes.
-
-## 8.2 Distribution type per feature
+Each numeric feature is classified by a fixed rule: *long-tail* if skewness > 2 and (excess
+kurtosis > 7 or 99th-percentile / median > 5); otherwise *right-skewed* if skewness > 0.5,
+*left-skewed* if skewness < −0.5, *multimodal* if the histogram has at least two separated peaks,
+*uniform* if excess kurtosis < −1, and *normal* otherwise.
+<!-- src: src/recsys/analysis/distribution.py (classify_distribution thresholds) -->
 
 | Feature | Distribution type | Skewness | Kurtosis | p99 / median |
 |---|---|---|---|---|
@@ -22,8 +28,56 @@ Source: `figures/v1` (`distribution_summary.parquet`, 10 features; figure PNGs).
 | saturated_fat_pdv | long-tail | 18.36 | 1,005.54 | 17.57 |
 | carbohydrates_pdv | long-tail | 371.33 | 163,270.81 | 17.11 |
 
-Nine of ten features are classed as long-tail. Only n_ingredients is classed as right-skewed (its skewness is below 1). The p99-to-median ratio ranges from 2.22 (n_ingredients) to 45.67 (sugar_pdv), so a few recipes sit far above the typical value.
+<!-- src: outputs/figures/v1/distribution_summary.parquet -->
 
-These distribution types drive the transform choice in Section 10.
+**Finding.** Nine of the ten features are long-tail; only `n_ingredients` is merely right-skewed
+(skewness 0.77, below the long-tail threshold of 2). The ratio of the 99th percentile to the median
+ranges from 2.22 (`n_ingredients`) to 45.67 (`sugar_pdv`)
+<!-- src: outputs/figures/v1/distribution_summary.parquet -->. The raw-scale histograms are a single
+bar next to zero with an invisible tail (for `calories`, one bin holds almost all 231,637 recipes
+while the axis runs to 434,360 kcal <!-- src: outputs/figures/v1/fig_06_07_calories_raw.png -->), while the log1p-scale versions show the full shape
+({{fig:fig_06_01_minutes_raw}} – {{fig:fig_06_20_carbohydrates_pdv_log1p}}). **Decision.**
+Histograms and box plots are always shown on both scales, and the long-tail features are clipped
+and log-transformed before scaling (Sections {{sec:outliers}} and {{sec:scaling}}). **Rationale.**
+On the raw scale the plots and any distance computation are dominated by a handful of extreme
+recipes; `n_ingredients` is already close to symmetric and is not log-transformed.
 
-Sources: `figures/v1/distribution_summary.parquet`, `figures/v1/manifest.json`, `scaling/v1/manifest.json`.
+## Ratings, ingredients, tags and activity
+
+The bar plot of ratings ({{fig:fig_06_21_rating_counts}}), the 20 most frequent ingredients and tags
+({{fig:fig_06_22_top20_ingredients}}, {{fig:fig_06_23_top20_tags}}) and the long-tail plots of
+reviews per user and per recipe ({{fig:fig_06_24_user_reviews_long_tail}},
+{{fig:fig_06_25_recipe_reviews_long_tail}}) are discussed with the descriptive statistics in
+Section {{sec:exploration}}: ratings are concentrated at 5 stars, the most frequent ingredients are
+pantry staples written in several spellings, and most users have a single review.
+
+## Relationships between features
+
+**Finding.** The Spearman correlations ({{fig:fig_06_29_corr_heatmap}}) show three groups:
+
+* Recipe size: `minutes`, `n_steps` and `n_ingredients` are moderately related — 0.40 between
+  `minutes` and `n_steps`, 0.44 between `n_steps` and `n_ingredients`, 0.36 between `minutes` and
+  `n_ingredients` <!-- src: outputs/figures/v1/fig_06_29_corr_heatmap.png -->
+  ({{fig:fig_06_26_scatter_ingredients_minutes}}).
+* Nutrition: the nutrition columns are strongly related to each other — 0.92 between total and
+  saturated fat, 0.83 between calories and total fat, 0.75 between calories and saturated fat,
+  0.72 between calories and protein, 0.63 between sugar and carbohydrates
+  <!-- src: outputs/figures/v1/fig_06_29_corr_heatmap.png -->.
+* Rating: the average rating is practically unrelated to every numeric feature (all correlations
+  between −0.04 and 0.03) and only weakly, negatively related to the number of ratings (−0.11)
+  <!-- src: outputs/figures/v1/fig_06_29_corr_heatmap.png -->
+  ({{fig:fig_06_27_scatter_calories_rating}}, {{fig:fig_06_28_scatter_steps_rating}}).
+
+The average rating also differs little between the ten most frequent tags: every box has its
+median close to 5 and an interquartile range from about 4.3 (about 4.2 for main-dish) to 5
+<!-- src: outputs/figures/v1/fig_06_30_box_rating_by_tag.png (read from the plot) --> ({{fig:fig_06_30_box_rating_by_tag}}).
+
+**Decision.** Recipe similarity is based on ingredients; the numeric features enter the distance
+only with a small explicit weight (Section {{sec:scaling}}), and the rating is not expected to be
+predictable from the numeric recipe features alone. **Rationale.** Correlated nutrition columns
+count the same information several times in an unweighted distance, and features that do not
+correlate with the rating cannot explain it; whether ingredients do is tested by the kNN prototype
+(Section {{sec:knn}}).
+
+The scaling figures ({{fig:fig_08_01_calories_raw}} – {{fig:fig_08_05_minutes_log1p_minmax}}) are
+discussed in Section {{sec:scaling}}.
