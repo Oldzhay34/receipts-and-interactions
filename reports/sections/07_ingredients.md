@@ -1,56 +1,92 @@
-# 7. Ingredient Normalization and Vocabulary
+# Ingredient Processing
 
-Source: `ingredients/v1` (input stage `loaded/v1`, `params`: min_count 10, encoding binary, n_modifiers 45). Tables: `normalization_summary.parquet`, `merged_variants.parquet`, `rare_threshold_coverage.parquet`; matrices: `binary_matrix.npz`, `tfidf_matrix.npz`; vocabulary: `vocab.json`.
+Ingredients are the core of the recommender: a query is a list of ingredients and recipes are
+compared through their ingredient sets. This section describes how the free-text ingredient
+strings are normalised, how rare strings are filtered and how the lists are encoded. The analysis
+version reported here normalises the whole catalogue <!-- src: outputs/ingredients/v2/manifest.json -->;
+the normaliser, filter and encoder that the models use are refitted on the training split inside
+the preprocessing pipeline (Section {{sec:sampling}}).
 
-## 7.1 Normalization
+## Normalisation
+
+**Finding.** Contributors write ingredients freely, so the same ingredient appears in many forms:
+the catalogue has 14,942 distinct ingredient strings
+<!-- src: outputs/ingredients/v2/normalization_summary.parquet (raw_unique_ingredients) -->, and the
+most frequent ones include "eggs" and "egg", "garlic cloves" and "garlic" (Section
+{{sec:exploration}}). **Decision.** `IngredientNormalizer` lower-cases each string, removes
+punctuation, removes 43 preparation, size and state words ("fresh", "chopped", "large", "dried",
+"to taste", …) and turns plural words into their singular form
+<!-- src: outputs/ingredients/v2/manifest.json (params.n_modifiers) --> <!-- src: config/config.yaml (ingredients.modifiers) -->.
+Words that change the ingredient itself — "sweet" (sweet potato) and "hot" (hot sauce) — are
+deliberately not removed, and words whose final "s" is not a plural (molasses, asparagus, hummus)
+are protected. The original column is kept and the result is written to a new column.
+**Rationale.** Two recipes that both use eggs must share the same vocabulary entry, otherwise their
+Jaccard similarity is understated; at the same time, merging two different ingredients would make
+unrelated recipes look similar.
 
 | Measure | Value |
 |---|---|
-| Raw unique ingredient strings | 14,942 |
-| Clean unique ingredients | 12,402 |
-| Reduction | 2,540 (17.0%) |
+| Raw distinct ingredient strings | 14,942 |
+| Distinct ingredients after normalisation | 12,458 |
+| Reduction | 2,484 (16.62 %) |
 
-The cleaning step merges surface variants (casing, modifiers such as "fresh", "canned", "dried", and similar qualifiers) into canonical names. The 20 canonical names with the most merged variants are:
+<!-- src: outputs/ingredients/v2/normalization_summary.parquet -->
 
-| Canonical | Variants merged |
-|---|---|
-| chicken breast | 22 |
-| red pepper | 20 |
-| potato | 18 |
-| shrimp | 17 |
-| tomato | 15 |
-| pepper | 15 |
-| mushroom | 15 |
-| onion | 13 |
-| chicken | 11 |
-| apple | 10 |
+The canonical ingredients with the most merged variants are chicken breast (22 variants), shrimp
+(17), tomato and mushroom (15 each), almond (12) and onion, peanut, potato and chicken (11 each)
+<!-- src: outputs/ingredients/v2/merged_variants.parquet --> ({{tab:merged_variants}}); for example,
+"canned tomatoes", "chopped tomato" and "canned whole tomatoes" all become "tomato"
+<!-- src: outputs/ingredients/v2/merged_variants.parquet (examples) -->. "Sweet potato" remains a
+separate ingredient, used 2,105 times <!-- src: outputs/ingredients/v2/recipes_ingredients.parquet (ingredients_clean) -->.
 
-(Remaining top-20 entries include peanuts, chicken breast half, carrot, chili pepper, almonds, mustard, coconut, red chili pepper, jalapeno pepper and green pepper, with 8–10 variants each.)
+**Limitation.** The rules are deliberately conservative: some distinct-but-related entries stay
+separate ("chicken" and "chicken breast", "red pepper" and "pepper"), and a query term only matches
+if it normalises to the same string as in the catalogue — "mozzarella" does not match the catalogue
+entry "mozzarella cheese" (Section {{sec:knn}}).
 
-The merge is not perfect. For example, "pepper" and "red pepper" remain separate canonical groups, and "chicken" and "chicken breast" are separate. Some of this is intended (different ingredients), some is ambiguity. This should be stated as a limitation in the final report.
+## Rare-ingredient threshold
 
-## 7.2 Rare-token threshold
+**Finding.** Most normalised strings are rare: requiring an ingredient to appear in at least 10
+recipes keeps 4,761 of the 12,458 entries (38.22 %) but still covers 98.95 % of all ingredient
+occurrences <!-- src: outputs/ingredients/v2/rare_threshold_coverage.parquet --> ({{tab:rare_threshold_coverage}}):
 
-The vocabulary is cut by minimum recipe count. The `rare_threshold_coverage` table:
-
-| min_count | Vocab size | Vocab retained (%) | Occurrence coverage (%) |
+| min_count | Vocabulary size | Vocabulary retained | Occurrences covered |
 |---|---|---|---|
-| 1 | 12,402 | 100.00 | 100.00 |
-| 2 | 9,277 | 74.80 | 99.85 |
-| 3 | 7,797 | 62.87 | 99.71 |
-| 5 | 6,380 | 51.44 | 99.48 |
-| 10 | 4,709 | 37.97 | 98.95 |
-| 20 | 3,458 | 27.88 | 98.13 |
-| 50 | 2,164 | 17.45 | 96.17 |
-| 100 | 1,507 | 12.15 | 93.96 |
+| 1 | 12,458 | 100.00 % | 100.00 % |
+| 2 | 9,334 | 74.92 % | 99.85 % |
+| 3 | 7,844 | 62.96 % | 99.71 % |
+| 5 | 6,434 | 51.65 % | 99.48 % |
+| **10** | **4,761** | **38.22 %** | **98.95 %** |
+| 20 | 3,489 | 28.01 % | 98.12 % |
+| 50 | 2,183 | 17.52 % | 96.13 % |
+| 100 | 1,514 | 12.15 % | 93.88 % |
 
-The project uses min_count = 10. This keeps 4,709 ingredients (37.97% of the clean vocabulary) and retains 98.95% of ingredient occurrences.
+<!-- src: outputs/ingredients/v2/rare_threshold_coverage.parquet -->
 
-## 7.3 Encoded matrices
+**Decision.** `RareIngredientFilter(min_count = 10)` <!-- src: config/config.yaml (ingredients.min_count) -->,
+with the counts learned on the training recipes only. **Rationale.** The removed strings are typos,
+brand names and one-off spellings; dropping 62 % of the vocabulary loses about 1 % of the
+ingredient occurrences while making the vectors shorter and the distances less noisy. A lower
+threshold keeps many entries that no query will ever hit; a higher one starts to drop real
+ingredients (at 100, 6.12 % of the occurrences are lost)
+<!-- src: outputs/ingredients/v2/rare_threshold_coverage.parquet (min_count = 100) -->. Fitted on the
+training split inside the pipeline, the vocabulary has 4,114 ingredients
+<!-- src: outputs/splits/v5/vocab.json -->.
 
-- Binary matrix: 231,637 recipes × 4,709 ingredients, CSR, 2,068,932 non-zero entries (`binary_matrix.npz`, 3,160,920 bytes).
-- TF-IDF matrix: same shape and non-zero count (`tfidf_matrix.npz`, 10,379,278 bytes).
+## Encoding
 
-Dividing non-zero entries by recipes gives about 8.93 retained ingredients per recipe. This is a derived value from the manifest figures, not a separate output. It is lower than the raw mean of 9.05 ingredients (Section 4), because rare ingredients are dropped.
+**Decision.** `IngredientEncoder` turns each recipe's filtered list into a row of a sparse CSR
+matrix with one column per vocabulary entry: binary (present / absent, the default) or TF-IDF
+(rare ingredients weighted higher, rows L2-normalised). The vocabulary and the matrix are written
+in the same version and checked against each other (number of columns = vocabulary size).
+**Rationale.** A binary vector is exactly what Jaccard distance compares; TF-IDF is kept as an
+alternative for cosine distance in the modelling phase.
 
-Sources: `ingredients/v1/normalization_summary.parquet`, `ingredients/v1/merged_variants.parquet`, `ingredients/v1/rare_threshold_coverage.parquet`, `ingredients/v1/manifest.json`.
+On the whole catalogue both matrices have 231,637 rows, 4,761 columns and 2,069,198 non-zero
+entries <!-- src: outputs/ingredients/v2/manifest.json (files.binary_matrix, files.tfidf_matrix) -->,
+i.e. about 8.93 retained ingredients per recipe (2,069,198 / 231,637), slightly fewer than the raw
+mean of 9.05 <!-- src: outputs/quality/v2/dqr_lists.parquet (ingredients Mean Len) --> because rare
+ingredients are dropped. The matrix is more than 99.8 % empty, which is why sparse storage and
+sparse distance computations are used. A user query is encoded by `QueryVectorizer` with the same
+normaliser and vocabulary; query terms outside the vocabulary are returned separately so the
+application can show them as "not recognised".
