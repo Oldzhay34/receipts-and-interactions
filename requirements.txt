@@ -1,12 +1,16 @@
-pandas
-numpy
-scipy
-scikit-learn
-matplotlib
-seaborn
-pyarrow
-pyyaml
-joblib
+# Lower bounds only (no pins): Colab ships these preinstalled and pinning would force
+# reinstalls that can break the runtime. Every output manifest records the exact versions it was
+# written with (``environment``); loading a pickled object checks them
+# (recsys.io.artifact_store.check_environment). Where an artefact is served (the Phase 4 API),
+# install the recorded versions: recsys.io.environment_requirements(manifest).
+pandas>=2.0
+numpy>=1.26
+scipy>=1.11
+scikit-learn>=1.6        # artefacts so far were written with 1.6.1 (Colab)
+matplotlib>=3.10         # boxplot(orientation=...), boxplot(tick_labels=...) in viz/plots.py
+pyarrow>=14
+pyyaml>=6
+joblib>=1.3
 python-docx
 pytest
 ruff

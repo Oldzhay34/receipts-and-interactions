@@ -16,6 +16,7 @@ from recsys.config import REPO_ROOT, Config
 from recsys.contracts import KNN_PROTOTYPE_OUTPUT_SCHEMA, validate
 from recsys.evaluation import metrics as M
 from recsys.evaluation.metrics import (
+    HeldOutRecipes,
     TestSetAccessError,
     check_split,
     compare_classifiers,
@@ -35,6 +36,7 @@ from recsys.models.knn import (
     RatingClassifierKNN,
     RatingRegressorKNN,
     RecipeRecommendation,
+    _k_smallest,
     catalogue_rows,
     catalogue_table,
     example_recommendations,
@@ -106,6 +108,9 @@ def test_nearest_neighbors_order_ties_and_batches() -> None:
 
 
 # --------------------------------------------------------------------------- rating models
+
+
+TOY_IDS = np.array([101, 102, 103, 104, 105])  # recipe ids of the _toy_xy rows
 
 
 def _toy_xy() -> tuple[sparse.csr_matrix, np.ndarray]:
@@ -418,15 +423,22 @@ def test_compare_refuses_test_before_fitting_anything() -> None:
             return super().fit(X, y)
 
     X, y = _toy_xy()
+    guard = {"eval_recipe_ids": TOY_IDS, "held_out": HeldOutRecipes.from_ids(TOY_IDS)}
     with pytest.raises(TestSetAccessError):
-        compare_classifiers({"m": Spy()}, X, y, X, y, ["high", "low"], split="test")
+        compare_classifiers({"m": Spy()}, X, y, X, y, ["high", "low"], split="test", **guard)
     with pytest.raises(TestSetAccessError):
-        compare_regressors({"m": MeanBaseline()}, X, np.ones(5), X, np.ones(5), split="test")
+        compare_regressors(
+            {"m": MeanBaseline()}, X, np.ones(5), X, np.ones(5), split="test", **guard
+        )
+    # labelled "val" but the rows are test recipes: refused by the data check, before any fit
+    with pytest.raises(TestSetAccessError, match="belong to the test split"):
+        compare_classifiers({"m": Spy()}, X, y, X, y, ["high", "low"], split="val", **guard)
     assert fitted == []
 
 
 def test_compare_tables_meet_schemas() -> None:
     X, y = _toy_xy()
+    guard = {"eval_recipe_ids": TOY_IDS, "held_out": HeldOutRecipes.from_ids([999])}
     cls, cm = compare_classifiers(
         {"majority": MajorityBaseline(), "knn": RatingClassifierKNN(n_neighbors=3)},
         X,
@@ -434,6 +446,7 @@ def test_compare_tables_meet_schemas() -> None:
         X,
         y,
         ["high", "low"],
+        **guard,
     )
     validate(cls, KNN_PROTOTYPE_OUTPUT_SCHEMA["classification_metrics"])
     validate(cm, KNN_PROTOTYPE_OUTPUT_SCHEMA["confusion_matrices"])
@@ -444,8 +457,70 @@ def test_compare_tables_meet_schemas() -> None:
         np.arange(5.0),
         X,
         np.arange(5.0),
+        **guard,
     )
     validate(reg, KNN_PROTOTYPE_OUTPUT_SCHEMA["regression_metrics"])
+
+
+def test_guard_checks_the_data_not_only_the_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    held_out = HeldOutRecipes.from_targets(pd.DataFrame({"recipe_id": [3, 4]}))
+    check_split("val", recipe_ids=[1, 2], held_out=held_out)  # no overlap: fine
+    with pytest.raises(TestSetAccessError, match="1 of the 2 evaluated recipes"):
+        check_split("val", recipe_ids=np.array([1, 4]), held_out=held_out)
+    with pytest.raises(TestSetAccessError):
+        check_split("train", recipe_ids=pd.Series([3]), held_out=held_out)
+    with pytest.raises(ValueError, match="needs recipe_ids"):
+        check_split("val", held_out=held_out)
+    with pytest.raises(TestSetAccessError, match="belong to the test split"):
+        evaluate_regression([1.0], [1.0], split="val", recipe_ids=[3], held_out=held_out)
+
+    # After the P2 unlock, a test evaluation still needs the data check and test-only rows.
+    monkeypatch.setattr(M, "TEST_EVALUATION_UNLOCKED", True)
+    with pytest.raises(TestSetAccessError, match="must pass held_out"):
+        check_split("test", allow_test=True)
+    with pytest.raises(TestSetAccessError, match="are not test recipes"):
+        check_split("test", allow_test=True, recipe_ids=[3, 1], held_out=held_out)
+    check_split("test", allow_test=True, recipe_ids=[3, 4, 4], held_out=held_out)
+
+
+def test_compare_needs_ids_for_every_evaluated_row() -> None:
+    X, y = _toy_xy()
+    with pytest.raises(ValueError, match="must match"):
+        compare_classifiers(
+            {"m": MajorityBaseline()},
+            X,
+            y,
+            X,
+            y,
+            ["high", "low"],
+            eval_recipe_ids=TOY_IDS[:3],
+            held_out=HeldOutRecipes.from_ids([]),
+        )
+
+
+def test_k_smallest_matches_full_stable_sort() -> None:
+    rng = np.random.default_rng(42)
+    cases = [
+        rng.random((40, 300)).astype(np.float32),  # no ties
+        rng.integers(0, 3, size=(40, 300)).astype(np.float64),  # heavy ties at the k-th place
+        np.ones((5, 50), dtype=np.float32),  # all equal
+    ]
+    for d in cases:
+        for k in (1, 2, 7, 49, d.shape[1] - 1, d.shape[1]):
+            expected = np.argsort(d, axis=1, kind="stable")[:, :k]
+            assert np.array_equal(_k_smallest(d, k), expected), (d.dtype, k)
+    with_nan = rng.random((4, 20))
+    with_nan[0, 3] = np.nan
+    assert np.array_equal(
+        _k_smallest(with_nan, 5), np.argsort(with_nan, axis=1, kind="stable")[:, :5]
+    )
+
+
+def test_nearest_neighbors_keeps_float64_distances_and_tie_order() -> None:
+    ref = sparse.csr_matrix(np.array([[1, 0], [1, 0], [0, 1], [1, 0]], dtype=np.float32))
+    idx, dist = nearest_neighbors(JaccardDistance(), ref[:1], ref, k=3, batch_size=1)
+    assert idx.tolist() == [[0, 1, 3]]  # three ties at 0: lower rows first
+    assert dist.dtype == np.float64 and dist.tolist() == [[0.0, 0.0, 0.0]]
 
 
 # --------------------------------------------------------------------------- notebook

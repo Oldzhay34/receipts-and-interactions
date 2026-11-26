@@ -10,6 +10,7 @@ from scipy.spatial.distance import euclidean
 
 from recsys.features.distance import JaccardDistance
 from recsys.features.scaling import (
+    CombinedFeatures,
     WeightedCombinedDistance,
     build_numeric_scaler,
     compare_scalers,
@@ -126,3 +127,76 @@ def test_column_scalers_learn_on_fit_data_only() -> None:
         mm.transform(val.drop(columns="a"))
     with pytest.raises(TypeError):
         registry.create("scaler", "minmax", columns=["a"]).fit(train.to_numpy())
+
+
+# --------------------------------------------------------------------------- combined features
+
+
+def _combined() -> tuple[CombinedFeatures, np.ndarray]:
+    ing = csr_matrix(
+        np.array(
+            [[1, 1, 0, 0], [1, 1, 0, 0], [1, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 0], [0, 1, 1, 0]]
+        )
+    )
+    num = np.array([[0.1, 0.2], [0.9, 0.8], [0.15, 0.2], [0.5, 0.5], [0.55, 0.45], [0.0, 1.0]])
+    return CombinedFeatures(ing, num), np.array(["high", "high", "high", "low", "low", "low"])
+
+
+def test_combined_features_behave_like_a_matrix() -> None:
+    X, _ = _combined()
+    assert X.shape == (6, 6) and len(X) == 6 and X.n_ingredient_columns == 4
+    sub = X[np.array([4, 0])]
+    assert isinstance(sub, CombinedFeatures) and sub.shape == (2, 6)
+    np.testing.assert_array_equal(sub.numeric, [[0.55, 0.45], [0.1, 0.2]])
+    assert X[1:3].shape == (2, 6) and X[-1].shape == (1, 6)
+    assert X[np.array([True, False, True, False, False, False])].shape == (2, 6)
+    with pytest.raises(ValueError, match="rows"):
+        CombinedFeatures(csr_matrix(np.eye(3)), np.zeros((2, 1)))
+    with pytest.raises(ValueError, match="NaN"):
+        CombinedFeatures(csr_matrix(np.eye(2)), np.array([[np.nan], [0.0]]))
+    with pytest.raises(IndexError):
+        X[6]
+
+
+def test_weighted_combined_distance_accepts_combined_features() -> None:
+    X, _ = _combined()
+    metric = WeightedCombinedDistance(ingredient_metric=JaccardDistance(), numeric_weight=0.25)
+    D = metric.pairwise(X[:2], X)
+    assert D.shape == (2, 6) and np.isclose(D[0, 0], 0.0)
+    # same as the tuple form
+    D_tuple = metric.pairwise((X.ingredients[:2], X.numeric[:2]), (X.ingredients, X.numeric))
+    np.testing.assert_allclose(D, D_tuple)
+    # weight 0 is the pure ingredient distance
+    D0 = WeightedCombinedDistance(JaccardDistance(), numeric_weight=0.0).pairwise(X, X)
+    np.testing.assert_allclose(D0, JaccardDistance().pairwise(X.ingredients, X.ingredients))
+    with pytest.raises(TypeError, match="CombinedFeatures"):
+        metric.pairwise(X.ingredients, X.ingredients)
+
+
+def test_rating_models_run_with_the_combined_distance() -> None:
+    """1.12-A O2: the combined distance must plug into the kNN code (P2 grid search)."""
+    from recsys.models.knn import (
+        RatingClassifierKNN,
+        RatingRegressorKNN,
+        nearest_neighbors,
+        recipe_rating_dataset,
+    )
+
+    X, y = _combined()
+    metric = WeightedCombinedDistance(JaccardDistance(), numeric_weight=0.5)
+    idx, dist = nearest_neighbors(metric, X, X, k=2, batch_size=4)
+    assert idx[:, 0].tolist() == list(range(6)) and np.allclose(dist[:, 0], 0.0)
+
+    clf = RatingClassifierKNN(metric=metric, n_neighbors=3, batch_size=2).fit(X, y)
+    assert clf.predict(X[[0, 3]]).tolist() == ["high", "low"]
+    reg = RatingRegressorKNN(metric=metric, n_neighbors=2, weights="distance").fit(
+        X, np.arange(6.0)
+    )
+    assert reg.predict(X).shape == (6,)
+
+    targets = pd.DataFrame(
+        {"recipe_id": [30, 10], "rating_class": ["high", "high"], "avg_rating": [4.0, 5.0]}
+    )
+    X_t, y_t, ids = recipe_rating_dataset(X, [10, 20, 30, 40, 50, 60], targets)
+    assert isinstance(X_t, CombinedFeatures) and X_t.shape == (2, 6) and ids.tolist() == [10, 30]
+    np.testing.assert_array_equal(X_t.numeric, X.numeric[[0, 2]])

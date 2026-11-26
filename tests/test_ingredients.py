@@ -204,3 +204,39 @@ def test_feature_classes_are_registered_and_clonable() -> None:
     bad = clone(IngredientEncoder(strategy="tfidf")).set_params(strategy="count")
     with pytest.raises(ValueError, match="Unsupported strategy"):
         bad.fit(pd.DataFrame({"ingredients_filtered": [["salt"]]}))
+
+
+def _dense_jaccard(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    a, b = (a > 0).astype(np.float32), (b > 0).astype(np.float32)
+    inter = a @ b.T
+    union = a.sum(1)[:, None] + b.sum(1)[None, :] - inter
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sim = np.where(union > 0, inter / union, 0.0)
+    return np.clip(1.0 - sim, 0.0, 1.0).astype(np.float32)
+
+
+def _dense_cosine(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    a, b = a.astype(np.float32), b.astype(np.float32)
+    dot = a @ b.T
+    denom = np.sqrt((a * a).sum(1))[:, None] * np.sqrt((b * b).sum(1))[None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sim = np.where(denom > 0, dot / denom, 0.0)
+    return np.clip(1.0 - sim, 0.0, 1.0).astype(np.float32)
+
+
+def test_sparse_distances_equal_the_dense_formula() -> None:
+    """Jaccard / cosine only compute pairs that share an ingredient; the rest must be exactly 1,
+    including empty ingredient lists (d(empty, x) = 1)."""
+    rng = np.random.default_rng(7)
+    a = (rng.random((30, 40)) < 0.08).astype(np.float32)
+    b = (rng.random((50, 40)) < 0.08).astype(np.float32)
+    a[0] = 0  # empty rows on both sides
+    b[:2] = 0
+    w = rng.random(b.shape).astype(np.float32)
+    for A, B in ((a, b), (sparse.csr_matrix(a), sparse.csr_matrix(b))):
+        d = JaccardDistance().pairwise(A, B)
+        assert d.dtype == np.float32 and d.shape == (30, 50)
+        np.testing.assert_array_equal(d, _dense_jaccard(a, b))
+    d = CosineDistance().pairwise(sparse.csr_matrix(a * w[:30]), sparse.csr_matrix(b * w))
+    np.testing.assert_allclose(d, _dense_cosine(a * w[:30], b * w), rtol=0, atol=1e-6)
+    assert (JaccardDistance().pairwise(a[:1], b[:2]) == 1.0).all()

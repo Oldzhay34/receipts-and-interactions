@@ -22,10 +22,16 @@ from recsys.io import (  # noqa: E402
     ArtifactError,
     ArtifactIntegrityError,
     ArtifactStore,
+    ArtifactVersionError,
+    ArtifactVersionWarning,
+    current_environment,
     describe_file,
+    environment_mismatches,
+    environment_requirements,
     read_artifact_dir,
     sha256_file,
 )
+from recsys.io.artifact_store import PICKLE_PACKAGES  # noqa: E402
 
 TOY = Schema("toy", {"a": Column("int", nullable=False)})
 
@@ -212,3 +218,76 @@ def test_export_and_read_dir(store: ArtifactStore, tmp_path: Path) -> None:
     assert art.stage == "sample" and art["t"]["a"].tolist() == [1, 2, 3]
     with pytest.raises(ArtifactError, match="already contains"):
         store.export("sample", dest)
+
+
+# ----------------------------------------------------------------- library versions (pickles)
+
+
+class _Fitted:  # a joblib object, like a fitted pipeline
+    def __init__(self) -> None:
+        self.value = 42
+
+
+def _rewrite_manifest(path: Path, edit) -> None:  # noqa: ANN001
+    mpath = path / "manifest.json"
+    m = json.loads(mpath.read_text(encoding="utf-8"))
+    edit(m)
+    mpath.write_text(json.dumps(m), encoding="utf-8")
+
+
+def test_manifest_records_library_versions(store: ArtifactStore) -> None:
+    art = store.save("loaded", {"t": df(), "model": _Fitted()})
+    env = art.manifest["environment"]
+    assert env == current_environment()
+    assert set(PICKLE_PACKAGES) <= set(env["packages"])
+    assert env["packages"]["scikit-learn"] is not None
+    assert environment_mismatches(art.manifest) == []
+    reqs = environment_requirements(art.manifest)
+    assert any(r.startswith("scikit-learn==") for r in reqs)
+    assert store.load("loaded")["model"].value == 42
+
+
+def test_pickle_written_with_other_versions_is_refused(store: ArtifactStore) -> None:
+    art = store.save("loaded", {"t": df(), "model": _Fitted()})
+    _rewrite_manifest(
+        art.path, lambda m: m["environment"]["packages"].update({"scikit-learn": "0.1.0"})
+    )
+    with pytest.raises(ArtifactVersionError, match="scikit-learn: written with 0.1.0"):
+        store.load("loaded")
+    with pytest.warns(ArtifactVersionWarning, match="scikit-learn"):
+        assert store.load("loaded", on_version_mismatch="warn")["model"].value == 42
+    assert store.load("loaded", on_version_mismatch="ignore")["model"].value == 42
+    # objects that are not pickles do not depend on the versions
+    assert store.load("loaded", names=["t"])["t"].equals(df())
+    with pytest.raises(ValueError, match="on_version_mismatch"):
+        store.load("loaded", on_version_mismatch="maybe")  # type: ignore[arg-type]
+
+
+def test_minor_level_packages_ignore_patch_versions(store: ArtifactStore) -> None:
+    art = store.save("loaded", {"model": _Fitted()})
+    installed = art.manifest["environment"]["packages"]["numpy"]
+    major, minor = installed.split(".")[:2]
+    _rewrite_manifest(
+        art.path, lambda m: m["environment"]["packages"].update({"numpy": f"{major}.{minor}.999"})
+    )
+    assert store.load("loaded")["model"].value == 42
+    _rewrite_manifest(
+        art.path, lambda m: m["environment"]["packages"].update({"numpy": f"{int(major) + 1}.0.0"})
+    )
+    with pytest.raises(ArtifactVersionError, match="numpy"):
+        store.load("loaded")
+
+
+def test_versions_written_before_the_check_load_with_a_warning(
+    store: ArtifactStore, tmp_path: Path
+) -> None:
+    art = store.save("loaded", {"model": _Fitted()})
+    _rewrite_manifest(art.path, lambda m: m.pop("environment"))
+    with pytest.warns(ArtifactVersionWarning, match="no library versions recorded"):
+        assert store.load("loaded")["model"].value == 42
+    # export copies files without unpickling, so it needs no version check
+    _rewrite_manifest(
+        art.path, lambda m: m.update({"environment": {"packages": {"scikit-learn": "0.1.0"}}})
+    )
+    dest = store.export("loaded", tmp_path / "copy")
+    assert (dest / "manifest.json").is_file()
