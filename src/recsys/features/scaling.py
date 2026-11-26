@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
 from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
@@ -170,12 +171,85 @@ def compare_scalers(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+class CombinedFeatures:
+    """Ingredient matrix and scaled numeric features of the same recipes, as one matrix-like object.
+
+    The kNN code (:func:`recsys.models.knn.nearest_neighbors`, the rating models,
+    :func:`recsys.models.knn.recipe_rating_dataset`) only needs ``.shape`` and row indexing, so a
+    ``CombinedFeatures`` can be passed wherever an ingredient matrix is expected, together with
+    :class:`WeightedCombinedDistance` as the metric.
+
+    Args:
+        ingredients: ``(n, n_vocab)`` ingredient matrix (sparse or dense), rows = recipes.
+        numeric: ``(n, n_numeric)`` numeric features, already scaled (fit on TRAIN only).
+
+    ``shape`` is ``(n, n_vocab + n_numeric)``. Indexing with a slice, an integer array or a
+    boolean mask returns a new ``CombinedFeatures`` with the selected rows; an integer keeps a
+    single row (shape ``(1, ...)``).
+    """
+
+    __slots__ = ("ingredients", "numeric")
+
+    def __init__(self, ingredients: Any, numeric: Any) -> None:
+        num = np.asarray(numeric, dtype=np.float64)
+        if num.ndim == 1:
+            num = num.reshape(-1, 1)
+        if num.ndim != 2:
+            raise ValueError(f"numeric must be 2-D, got shape {num.shape}")
+        ing = sparse.csr_matrix(ingredients) if sparse.issparse(ingredients) else ingredients
+        if getattr(ing, "ndim", 2) != 2:
+            raise ValueError("ingredients must be a 2-D matrix")
+        if ing.shape[0] != num.shape[0]:
+            raise ValueError(f"ingredients has {ing.shape[0]} rows but numeric has {num.shape[0]}")
+        if np.isnan(num).any():
+            raise ValueError("numeric features contain NaN: impute before combining")
+        self.ingredients = ing
+        self.numeric = num
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (
+            int(self.ingredients.shape[0]),
+            int(self.ingredients.shape[1] + self.numeric.shape[1]),
+        )
+
+    @property
+    def n_ingredient_columns(self) -> int:
+        return int(self.ingredients.shape[1])
+
+    def __len__(self) -> int:
+        return int(self.numeric.shape[0])
+
+    def __getitem__(self, key: Any) -> CombinedFeatures:
+        if isinstance(key, tuple):
+            raise TypeError("CombinedFeatures supports row indexing only")
+        if isinstance(key, (int, np.integer)):
+            n = len(self)
+            i = int(key) + n if key < 0 else int(key)
+            if not 0 <= i < n:
+                raise IndexError(f"row {key} out of range for {n} rows")
+            key = slice(i, i + 1)
+        return CombinedFeatures(self.ingredients[key], self.numeric[key])
+
+    def __repr__(self) -> str:
+        return f"CombinedFeatures(shape={self.shape}, n_numeric={self.numeric.shape[1]})"
+
+
 class WeightedCombinedDistance:
     """Combines an injected ingredient DistanceMetric with scaled numeric distance.
 
-    Implements the DistanceMetric protocol: ``pairwise(A, B) -> np.ndarray``.
-    Each input ``A`` and ``B`` is a tuple ``(X_ingredients, X_numeric_scaled)``.
-    Combined distance = (1 - numeric_weight) * d_ing + numeric_weight * d_num_norm.
+    Implements the DistanceMetric protocol: ``pairwise(A, B) -> np.ndarray``. ``A`` and ``B`` are
+    :class:`CombinedFeatures` (an ``(X_ingredients, X_numeric_scaled)`` tuple is still accepted).
+    Combined distance = (1 - numeric_weight) * d_ing + numeric_weight * d_num_norm, where
+    ``d_num_norm`` is the Euclidean distance of the scaled numeric features divided by
+    ``sqrt(n_numeric)`` (in [0, 1] for Min-Max scaled features).
+
+    Example (rating model with the combined distance)::
+
+        X = CombinedFeatures(ingredient_matrix, scaled_numeric)   # rows = catalogue recipes
+        model = RatingClassifierKNN(metric=WeightedCombinedDistance(JaccardDistance(), 0.2))
+        X_tr, y_tr, ids_tr = recipe_rating_dataset(X, catalogue_ids, targets_train)
+        model.fit(X_tr, y_tr)
     """
 
     def __init__(
@@ -188,25 +262,29 @@ class WeightedCombinedDistance:
         self.ingredient_metric = ingredient_metric
         self.numeric_weight = float(numeric_weight)
 
-    def pairwise(
-        self,
-        A: tuple[Any, np.ndarray],
-        B: tuple[Any, np.ndarray],
-    ) -> np.ndarray:
-        A_ing, A_num = A
-        B_ing, B_num = B
+    @staticmethod
+    def _parts(X: Any, name: str) -> tuple[Any, np.ndarray]:
+        if isinstance(X, CombinedFeatures):
+            return X.ingredients, X.numeric
+        if isinstance(X, tuple) and len(X) == 2:
+            c = CombinedFeatures(*X)
+            return c.ingredients, c.numeric
+        raise TypeError(
+            f"{name} must be CombinedFeatures (or an (ingredients, numeric) tuple), "
+            f"got {type(X).__name__}"
+        )
+
+    def pairwise(self, A: Any, B: Any) -> np.ndarray:
+        A_ing, A_num = self._parts(A, "A")
+        B_ing, B_num = self._parts(B, "B")
+        if A_num.shape[1] != B_num.shape[1]:
+            raise ValueError(f"numeric feature counts differ: {A_num.shape[1]} vs {B_num.shape[1]}")
 
         d_ing = np.asarray(self.ingredient_metric.pairwise(A_ing, B_ing), dtype=float)
-        A_num_arr = np.asarray(A_num, dtype=float)
-        B_num_arr = np.asarray(B_num, dtype=float)
-
-        if A_num_arr.ndim == 1:
-            A_num_arr = A_num_arr.reshape(1, -1)
-        if B_num_arr.ndim == 1:
-            B_num_arr = B_num_arr.reshape(1, -1)
-
+        if self.numeric_weight == 0.0:
+            return d_ing
         # Normalize Euclidean distance by sqrt(n_features) so MinMax-scaled values stay in [0, 1]
-        n_features = max(A_num_arr.shape[1], 1)
-        d_num = cdist(A_num_arr, B_num_arr, metric="euclidean") / np.sqrt(n_features)
+        n_features = max(A_num.shape[1], 1)
+        d_num = cdist(A_num, B_num, metric="euclidean") / np.sqrt(n_features)
 
         return (1.0 - self.numeric_weight) * d_ing + self.numeric_weight * d_num

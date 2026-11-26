@@ -14,6 +14,12 @@ Layout under ``<DATA_ROOT>/outputs``::
 * Isolation: each stage writes only under its own folder; stage names must be in config.
 * Durability: existing versions are never overwritten; every version has a manifest with sha256,
   row/column counts, dtypes, git commit, UTC timestamp, input references and params.
+* Pickle compatibility: the manifest also records the Python and library versions
+  (``environment``). Objects stored with joblib (fitted transformers, pipelines, recommenders) are
+  pickles, which are only reliable with the library versions that wrote them, so loading one
+  checks the recorded versions first (:func:`check_environment`): by default a mismatch raises
+  :class:`ArtifactVersionError` (``on_version_mismatch="warn"`` / ``"ignore"`` relax it).
+  Versions written before this check (no ``environment``) load with a warning.
 
 Supported objects (by type): ``pandas.DataFrame`` -> parquet, ``scipy.sparse`` -> npz,
 ``dict``/``list`` -> json, ``str`` -> txt, matplotlib ``Figure`` -> png (loads back as the png
@@ -25,15 +31,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import uuid
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib import metadata
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import joblib
 import pandas as pd
@@ -57,6 +66,21 @@ _OBJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _VERSION_RE = re.compile(r"^v(\d+)$")
 _CHUNK = 1 << 20
 
+#: Libraries whose versions decide whether a joblib (pickle) object loads correctly, with how
+#: much of the version must match: "exact" (scikit-learn only supports unpickling with the same
+#: version) or "minor" (major.minor).
+PICKLE_PACKAGES: dict[str, Literal["exact", "minor"]] = {
+    "scikit-learn": "exact",
+    "numpy": "minor",
+    "scipy": "minor",
+    "pandas": "minor",
+    "joblib": "minor",
+}
+#: Recorded for information (parquet / npz files do not depend on the exact version).
+INFO_PACKAGES: tuple[str, ...] = ("pyarrow", "matplotlib")
+
+VersionPolicy = Literal["error", "warn", "ignore"]
+
 
 class ArtifactError(RuntimeError):
     """Invalid request, missing version, or an attempt to overwrite a version."""
@@ -64,6 +88,14 @@ class ArtifactError(RuntimeError):
 
 class ArtifactIntegrityError(ArtifactError):
     """A stored file does not match the sha256 recorded in its manifest."""
+
+
+class ArtifactVersionError(ArtifactError):
+    """A pickled object was written with library versions that differ from the installed ones."""
+
+
+class ArtifactVersionWarning(UserWarning):
+    """Library versions of a pickled object differ, or were not recorded."""
 
 
 @dataclass(frozen=True)
@@ -207,6 +239,7 @@ class ArtifactStore:
                 "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "recsys_version": __version__,
                 "git": _git_info(),
+                "environment": current_environment(),
                 "params": params_json,
                 "inputs": input_refs,
                 "files": files,
@@ -229,9 +262,17 @@ class ArtifactStore:
     # ----------------------------------------------------------------- load
 
     def load(
-        self, stage: str, version: str = "LATEST", names: Iterable[str] | None = None
+        self,
+        stage: str,
+        version: str = "LATEST",
+        names: Iterable[str] | None = None,
+        on_version_mismatch: VersionPolicy = "error",
     ) -> Artifact:
-        """Load a stage version, verifying every file's sha256 against the manifest."""
+        """Load a stage version, verifying every file's sha256 against the manifest.
+
+        Before a joblib (pickle) object is read, the library versions recorded in the manifest are
+        compared with the installed ones (see :func:`check_environment`).
+        """
         resolved = self.latest(stage) if version == "LATEST" else version
         if resolved is None:
             raise ArtifactError(f"Stage {stage!r} has no saved versions under {self.root}")
@@ -240,7 +281,7 @@ class ArtifactStore:
         path = self.stage_dir(stage) / resolved
         if not path.is_dir():
             raise ArtifactError(f"Version not found: {path}")
-        return read_artifact_dir(path, names=names)
+        return read_artifact_dir(path, names=names, on_version_mismatch=on_version_mismatch)
 
     def export(self, stage: str, dest: str | os.PathLike[str], version: str = "LATEST") -> Path:
         """Copy a verified version folder to ``dest`` (e.g. outputs/sample -> repo data/sample).
@@ -248,7 +289,8 @@ class ArtifactStore:
         Refuses if ``dest`` already holds a manifest (no overwrite). Placeholder files such as
         ``.gitkeep`` are left alone.
         """
-        art = self.load(stage, version)
+        # Files are copied, not unpickled, so library versions do not matter here.
+        art = self.load(stage, version, on_version_mismatch="ignore")
         dest_p = Path(dest)
         if (dest_p / MANIFEST_NAME).exists():
             raise ArtifactError(f"{dest_p} already contains an artefact; remove it first")
@@ -285,8 +327,18 @@ class ArtifactStore:
             tmp.unlink(missing_ok=True)
 
 
-def read_artifact_dir(path: str | os.PathLike[str], names: Iterable[str] | None = None) -> Artifact:
-    """Read and verify a version folder (also works on an exported copy such as data/sample)."""
+def read_artifact_dir(
+    path: str | os.PathLike[str],
+    names: Iterable[str] | None = None,
+    on_version_mismatch: VersionPolicy = "error",
+) -> Artifact:
+    """Read and verify a version folder (also works on an exported copy such as data/sample).
+
+    Raises:
+        ArtifactIntegrityError: a file does not match its sha256.
+        ArtifactVersionError: a requested joblib object was written with other library versions
+            and ``on_version_mismatch == "error"``.
+    """
     p = Path(path)
     mpath = p / MANIFEST_NAME
     if not mpath.is_file():
@@ -297,6 +349,9 @@ def read_artifact_dir(path: str | os.PathLike[str], names: Iterable[str] | None 
     unknown = [n for n in wanted if n not in files]
     if unknown:
         raise ArtifactError(f"{p}: unknown objects {unknown}; available {sorted(files)}")
+    pickled = [n for n in wanted if files[n]["kind"] == "joblib"]
+    if pickled:
+        check_environment(manifest, on_version_mismatch, what=f"{p} ({', '.join(pickled)})")
     objects = {}
     for name in wanted:
         entry = files[name]
@@ -425,6 +480,94 @@ def _json_default(o: Any) -> Any:
     if hasattr(o, "tolist") and callable(o.tolist):  # numpy arrays
         return o.tolist()
     raise TypeError(f"{type(o).__name__} is not JSON serialisable")
+
+
+# --------------------------------------------------------------------------- environment
+
+
+def _installed_version(package: str) -> str | None:
+    try:
+        return metadata.version(package)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def current_environment() -> dict[str, Any]:
+    """Python and library versions, as recorded in every manifest (``environment``)."""
+    packages = {name: _installed_version(name) for name in (*PICKLE_PACKAGES, *INFO_PACKAGES)}
+    return {"python": platform.python_version(), "packages": packages}
+
+
+def _same(recorded: str, installed: str, level: Literal["exact", "minor"]) -> bool:
+    if level == "exact":
+        return recorded == installed
+    return recorded.split(".")[:2] == installed.split(".")[:2]
+
+
+def environment_mismatches(manifest: Mapping[str, Any]) -> list[str]:
+    """Pickle-relevant libraries whose recorded version differs from the installed one.
+
+    Each entry reads ``"scikit-learn: written with 1.6.1, installed 1.9.1"``. Returns ``[]`` when
+    everything matches. Raises :class:`KeyError` if the manifest has no ``environment``.
+    """
+    recorded = manifest["environment"]["packages"]
+    out = []
+    for name, level in PICKLE_PACKAGES.items():
+        rec, inst = recorded.get(name), _installed_version(name)
+        if rec is None or inst is None:
+            if rec != inst:
+                out.append(f"{name}: written with {rec}, installed {inst}")
+        elif not _same(rec, inst, level):
+            out.append(f"{name}: written with {rec}, installed {inst}")
+    return out
+
+
+def environment_requirements(manifest: Mapping[str, Any]) -> list[str]:
+    """``name==version`` lines that reproduce the environment a version was written with.
+
+    For installing exactly those versions where the artefact is loaded (e.g. the Phase 4 API)::
+
+        pip install $(python -c "...print(' '.join(environment_requirements(m)))")
+    """
+    packages = manifest["environment"]["packages"]
+    return [f"{name}=={v}" for name, v in packages.items() if v is not None]
+
+
+def check_environment(
+    manifest: Mapping[str, Any], policy: VersionPolicy = "error", what: str = "artefact"
+) -> None:
+    """Check that pickled objects of ``manifest`` can be loaded with the installed libraries.
+
+    Args:
+        manifest: A version's manifest.
+        policy: ``"error"`` raises :class:`ArtifactVersionError` on a mismatch, ``"warn"`` emits
+            :class:`ArtifactVersionWarning`, ``"ignore"`` does nothing.
+        what: Name used in the message.
+    """
+    if policy not in ("error", "warn", "ignore"):
+        raise ValueError(f"on_version_mismatch must be 'error', 'warn' or 'ignore', got {policy!r}")
+    if policy == "ignore":
+        return
+    if "environment" not in manifest:
+        warnings.warn(
+            f"{what}: no library versions recorded (written before the version check); "
+            "re-run the stage to record them",
+            ArtifactVersionWarning,
+            stacklevel=3,
+        )
+        return
+    diff = environment_mismatches(manifest)
+    if not diff:
+        return
+    msg = (
+        f"{what}: pickled objects were written with other library versions ("
+        + "; ".join(diff)
+        + "). Install the recorded versions (environment_requirements(manifest)) or re-run the "
+        "stage; pass on_version_mismatch='warn' to load anyway."
+    )
+    if policy == "error":
+        raise ArtifactVersionError(msg)
+    warnings.warn(msg, ArtifactVersionWarning, stacklevel=3)
 
 
 def _git_info() -> dict[str, Any]:

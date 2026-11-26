@@ -53,7 +53,8 @@ def nearest_neighbors(
     """The ``k`` nearest ``reference`` rows of every ``X`` row, computed in row batches.
 
     Only a ``(batch_size, n_reference)`` distance block is in memory at a time. Ties are broken
-    by the lower reference row, so results are deterministic.
+    by the lower reference row, so results are deterministic. Selecting the k nearest is linear
+    in ``n_reference`` (partition, not a full sort).
 
     Returns:
         ``(indices, distances)``, both of shape ``(n_X, min(k, n_reference))``, nearest first.
@@ -69,12 +70,37 @@ def nearest_neighbors(
     dist = np.empty((n, k), dtype=np.float64)
     for start in range(0, n, batch_size):
         stop = min(start + batch_size, n)
-        d = np.asarray(metric.pairwise(X[start:stop], reference), dtype=np.float64)
-        # stable sort on (distance, column) -> lower column wins ties
-        order = np.argsort(d, axis=1, kind="stable")[:, :k]
+        d = np.asarray(metric.pairwise(X[start:stop], reference))
+        if not np.issubdtype(d.dtype, np.floating):
+            d = d.astype(np.float64)
+        order = _k_smallest(d, k)  # float32 blocks are ranked as is (no float64 copy)
         idx[start:stop] = order
         dist[start:stop] = np.take_along_axis(d, order, axis=1)
     return idx, dist
+
+
+def _k_smallest(d: np.ndarray, k: int) -> np.ndarray:
+    """Column indices of the ``k`` smallest values of every row, ordered by (value, column).
+
+    Same result as ``np.argsort(d, axis=1, kind="stable")[:, :k]`` (lower column wins ties) but
+    linear in the number of columns: ``argpartition`` picks k candidates per row; only rows where
+    it had to choose among tied values at the k-th place are redone, keeping the lowest columns.
+    """
+    n, m = d.shape
+    if k >= m or np.isnan(d).any():  # nothing to save, or NaN ordering: use the full sort
+        return np.argsort(d, axis=1, kind="stable")[:, :k]
+    cand = np.argpartition(d, k - 1, axis=1)[:, :k]
+    cand_d = np.take_along_axis(d, cand, axis=1)
+    kth = cand_d.max(axis=1, keepdims=True)
+    n_tied = (d == kth).sum(axis=1)
+    n_tied_chosen = (cand_d == kth).sum(axis=1)
+    for r in np.flatnonzero(n_tied > n_tied_chosen):  # unchosen ties: take the lowest columns
+        row, t = d[r], kth[r, 0]
+        below = np.flatnonzero(row < t)
+        cand[r] = np.concatenate([below, np.flatnonzero(row == t)[: k - below.size]])
+    cand.sort(axis=1)  # ascending columns, so the stable sort below breaks ties by column
+    order = np.argsort(np.take_along_axis(d, cand, axis=1), axis=1, kind="stable")
+    return np.take_along_axis(cand, order, axis=1)
 
 
 def _vote_weights(distances: np.ndarray, weights: Weights, eps: float) -> np.ndarray:
@@ -113,7 +139,12 @@ class _KNNBase:
         if X.shape[0] == 0:
             raise ValueError("cannot fit on an empty training set")
         _vote_weights(np.zeros(1), self.weights, self.eps)  # validate early
-        self.X_fit_ = sparse.csr_matrix(X) if sparse.issparse(X) else np.asarray(X)
+        if sparse.issparse(X):
+            self.X_fit_ = sparse.csr_matrix(X)
+        elif isinstance(X, np.ndarray) or not (hasattr(X, "shape") and hasattr(X, "__getitem__")):
+            self.X_fit_ = np.asarray(X)
+        else:  # matrix-like feature container, e.g. recsys.features.scaling.CombinedFeatures
+            self.X_fit_ = X
         return y_arr
 
     def _neighbours(self, X: Any) -> tuple[np.ndarray, np.ndarray]:
@@ -491,9 +522,17 @@ class KNNRecipeRecommender:
         return store.save(STAGE, objects, inputs=inputs, params=params, schemas=schemas)
 
     @classmethod
-    def load(cls, store: Any, version: str = "LATEST") -> KNNRecipeRecommender:
-        """Load a saved recommender (sha256-verified by the ArtifactStore)."""
-        obj = store.load(STAGE, version, names=[RECOMMENDER_OBJECT])[RECOMMENDER_OBJECT]
+    def load(
+        cls, store: Any, version: str = "LATEST", on_version_mismatch: str = "error"
+    ) -> KNNRecipeRecommender:
+        """Load a saved recommender (sha256-verified by the ArtifactStore).
+
+        The recommender is a pickle: by default loading refuses if it was written with other
+        library versions (:func:`recsys.io.artifact_store.check_environment`).
+        """
+        obj = store.load(
+            STAGE, version, names=[RECOMMENDER_OBJECT], on_version_mismatch=on_version_mismatch
+        )[RECOMMENDER_OBJECT]
         if not isinstance(obj, cls):
             raise TypeError(f"{STAGE}/{RECOMMENDER_OBJECT} is a {type(obj).__name__}")
         return obj
