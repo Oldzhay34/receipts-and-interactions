@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
+from recsys import registry
 from recsys.registry import register
 
 
@@ -191,3 +193,27 @@ def compare_binning_strategies(
                 }
             )
     return pd.DataFrame(rows)
+
+
+def binner_from_config(column: str, spec: Mapping[str, Any]) -> BaseEstimator:
+    """Build the binner of ``column`` from its ``config.yaml`` ``binning`` entry.
+
+    ``spec`` holds ``strategy`` (registry name: ``domain`` / ``equal_width`` /
+    ``equal_frequency``) and that class's parameters (``edges``, ``n_bins``, ``labels``,
+    ``output_col``, ``right``). Example: ``binner_from_config("minutes", cfg.section("binning")
+    ["minutes"])``.
+    """
+    params = dict(spec)
+    if "strategy" not in params:
+        raise KeyError(f"binning spec for {column!r} has no 'strategy'")
+    strategy = params.pop("strategy")
+    return registry.create("binner", strategy, column=column, **params)
+
+
+def edges_for_manifest(edges: Iterable[float]) -> list[float | str]:
+    """Bin edges as JSON-safe values (``inf`` -> ``"inf"``) for manifest params."""
+    out: list[float | str] = []
+    for e in edges:
+        e = float(e)
+        out.append(e if np.isfinite(e) else ("inf" if e > 0 else "-inf"))
+    return out

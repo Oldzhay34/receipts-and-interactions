@@ -1055,3 +1055,191 @@ KNN_PROTOTYPE_OUTPUT_SCHEMA: Mapping[str, Schema] = {
     "confusion_matrices": KNN_CONFUSION_SCHEMA,
     "example_recommendations": KNN_EXAMPLE_RECOMMENDATIONS_SCHEMA,
 }
+
+
+# --------------------------------------------------------------------------- 1.12-A O3
+# Output tables of stages 1.2 / 1.5 / 1.6 / 1.7 / 1.8 that were written without a schema.
+# Each ``*_STAGE_SCHEMAS`` maps the object name in the stage to its schema, ready to pass as
+# ``ArtifactStore.save(..., schemas=...)``.
+
+_PCT = Column("float", nullable=False, min=0.0, max=100.0)
+_COUNT = Column("int", nullable=False, min=0)
+
+DQR_CONTINUOUS_SCHEMA = Schema(
+    "dqr_continuous",
+    {
+        "Feature": Column("str", nullable=False, unique=True),
+        "Count": _COUNT,
+        "% Missing": _PCT,
+        "Cardinality": _COUNT,
+        **{
+            k: Column("float")
+            for k in ("Min", "Q1", "Mean", "Median", "Q3", "Max", "Std Dev", "Skewness", "Kurtosis")
+        },
+    },
+    min_rows=1,
+)
+
+DQR_CATEGORICAL_SCHEMA = Schema(
+    "dqr_categorical",
+    {
+        "Feature": Column("str", nullable=False, unique=True),
+        "Count": _COUNT,
+        "% Missing": _PCT,
+        "Cardinality": _COUNT,
+        "Mode": Column("str"),
+        "Mode Freq": _COUNT,
+        "Mode %": _PCT,
+        "2nd Mode": Column("str"),
+        "2nd Mode Freq": _COUNT,
+        "2nd Mode %": _PCT,
+    },
+    min_rows=1,
+)
+
+DQR_LISTS_SCHEMA = Schema(
+    "dqr_lists",
+    {
+        "Feature": Column("str", nullable=False, unique=True),
+        "Count": _COUNT,
+        "% Missing": _PCT,
+        "Unique Items": _COUNT,
+        "Min Len": _COUNT,
+        "Median Len": Column("float", min=0.0),
+        "Mean Len": Column("float", min=0.0),
+        "Max Len": _COUNT,
+    },
+    min_rows=1,
+)
+
+#: object name in the ``quality`` stage -> schema.
+QUALITY_STAGE_SCHEMAS: Mapping[str, Schema] = {
+    "dqr_continuous": DQR_CONTINUOUS_SCHEMA,
+    "dqr_categorical": DQR_CATEGORICAL_SCHEMA,
+    "dqr_lists": DQR_LISTS_SCHEMA,
+    "issues": QUALITY_ISSUES_SCHEMA,
+}
+
+NORMALIZATION_SUMMARY_SCHEMA = Schema(
+    "normalization_summary",
+    {
+        "raw_unique_ingredients": _COUNT,
+        "clean_unique_ingredients": _COUNT,
+        "reduction_count": Column("int", nullable=False),
+        "reduction_pct": Column("float", nullable=False, max=100.0),
+    },
+    min_rows=1,
+)
+
+MERGED_VARIANTS_SCHEMA = Schema(
+    "merged_variants",
+    {
+        "canonical": Column("str", nullable=False, unique=True),
+        "variant_count": Column("int", nullable=False, min=2),
+        "examples": Column("str", nullable=False),
+    },
+)
+
+RARE_THRESHOLD_COVERAGE_SCHEMA = Schema(
+    "rare_threshold_coverage",
+    {
+        "min_count": Column("int", nullable=False, min=1, unique=True),
+        "vocab_size": _COUNT,
+        "vocab_retained_pct": _PCT,
+        "occurrence_coverage_pct": _PCT,
+    },
+    min_rows=1,
+)
+
+#: object name in the ``ingredients`` stage -> schema (tables only).
+INGREDIENTS_STAGE_SCHEMAS: Mapping[str, Schema] = {
+    "recipes_ingredients": INGREDIENTS_OUTPUT_SCHEMA,
+    "normalization_summary": NORMALIZATION_SUMMARY_SCHEMA,
+    "merged_variants": MERGED_VARIANTS_SCHEMA,
+    "rare_threshold_coverage": RARE_THRESHOLD_COVERAGE_SCHEMA,
+}
+
+DISTRIBUTION_SUMMARY_SCHEMA = Schema(
+    "distribution_summary",
+    {
+        "feature": Column("str", nullable=False, unique=True),
+        "distribution_type": Column(
+            "str",
+            nullable=False,
+            allowed={
+                "normal",
+                "right-skewed",
+                "left-skewed",
+                "long-tail",
+                "uniform",
+                "multimodal",
+                "constant",
+            },
+        ),
+        "skewness": Column("float"),
+        "kurtosis": Column("float"),
+        "p99_to_median_ratio": Column("float"),
+    },
+    min_rows=1,
+)
+
+COLD_START_SUMMARY_SCHEMA = Schema(
+    "cold_start_summary",
+    {
+        "entity": Column("str", nullable=False, unique=True, allowed={"user", "recipe"}),
+        "total_unique": _COUNT,
+        "single_review_count": _COUNT,
+        "single_review_pct": _PCT,
+        "median_reviews": Column("float", nullable=False, min=1.0),
+        "max_reviews": Column("int", nullable=False, min=1),
+    },
+    min_rows=2,
+)
+
+#: object name in the ``figures`` stage -> schema (tables only).
+FIGURES_STAGE_SCHEMAS: Mapping[str, Schema] = {
+    "distribution_summary": DISTRIBUTION_SUMMARY_SCHEMA,
+    "cold_start_summary": COLD_START_SUMMARY_SCHEMA,
+}
+
+BINNING_COMPARISON_SCHEMA = Schema(
+    "binning_comparison",
+    {
+        "column": Column("str", nullable=False),
+        "strategy": Column("str", nullable=False),
+        "bin": Column("str", nullable=False),
+        "count": _COUNT,
+        "pct": _PCT,
+    },
+    unique_together=(("strategy", "bin"),),
+    min_rows=1,
+)
+
+#: object name in the ``binning`` stage -> schema (tables only).
+BINNING_STAGE_SCHEMAS: Mapping[str, Schema] = {
+    "minutes_comparison": BINNING_COMPARISON_SCHEMA,
+    "avg_rating_comparison": BINNING_COMPARISON_SCHEMA,
+    "calories_comparison": BINNING_COMPARISON_SCHEMA,
+}
+
+SCALER_SUMMARY_SCHEMA = Schema(
+    "scaler_summary",
+    {
+        "feature": Column("str", nullable=False),
+        "transform": Column("str", nullable=False),
+        **{k: Column("float", nullable=False) for k in ("min", "median", "mean")},
+        "std": Column("float", nullable=False, min=0.0),
+        "max": Column("float", nullable=False),
+    },
+    unique_together=(("feature", "transform"),),
+    min_rows=1,
+)
+
+
+def combined_distance_sample_schema(n: int) -> Schema:
+    """Square ``n`` x ``n`` table of combined distances (columns recipe_0 .. recipe_{n-1})."""
+    return Schema(
+        f"combined_distance_sample_{n}",
+        {f"recipe_{i}": Column("float", nullable=False, min=0.0, max=1.0) for i in range(n)},
+        min_rows=n,
+    )

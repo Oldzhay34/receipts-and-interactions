@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from recsys.features.binning import (
     DomainBins,
@@ -114,3 +115,31 @@ def test_equal_frequency_warns_when_labels_cannot_be_used() -> None:
     with pytest.warns(UserWarning, match="configured labels cannot be used"):
         binner = EqualFrequencyBins(column="avg_rating", n_bins=3, labels=["l", "m", "h"]).fit(df)
     assert binner.labels_ == ["q_0"]  # edges 3, 5, 5, 5 -> one distinct bin
+
+
+def test_binners_are_built_from_the_config_block() -> None:
+    """1.12-A O4: notebook 07 reads its bins from config.yaml instead of literal edges."""
+    import yaml
+
+    from recsys.config import DEFAULT_CONFIG_PATH
+    from recsys.features.binning import DomainBins, binner_from_config, edges_for_manifest
+
+    spec = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))["binning"]
+    minutes = binner_from_config("minutes", spec["minutes"])
+    assert isinstance(minutes, DomainBins) and minutes.right is False
+    out = minutes.fit_transform(pd.DataFrame({"minutes": [0, 29, 30, 59, 60, 10_000]}))
+    assert out["minutes_bin"].astype(str).tolist() == [
+        "quick",
+        "quick",
+        "medium",
+        "medium",
+        "long",
+        "long",
+    ]
+    rating = binner_from_config("avg_rating", spec["avg_rating"])
+    assert rating.output_col == "rating_class" and list(rating.edges) == [0, 3.5, 4.5, 5.0]
+    calories = binner_from_config("calories", spec["calories"])
+    assert type(calories).__name__ == "EqualFrequencyBins" and calories.n_bins == 3
+    assert edges_for_manifest(spec["minutes"]["edges"]) == [0.0, 30.0, 60.0, "inf"]
+    with pytest.raises(KeyError, match="strategy"):
+        binner_from_config("minutes", {"edges": [0, 1]})

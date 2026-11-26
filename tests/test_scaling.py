@@ -200,3 +200,52 @@ def test_rating_models_run_with_the_combined_distance() -> None:
     X_t, y_t, ids = recipe_rating_dataset(X, [10, 20, 30, 40, 50, 60], targets)
     assert isinstance(X_t, CombinedFeatures) and X_t.shape == (2, 6) and ids.tolist() == [10, 30]
     np.testing.assert_array_equal(X_t.numeric, X.numeric[[0, 2]])
+
+
+def test_build_numeric_scaler_reads_the_project_config(tmp_path) -> None:  # noqa: ANN001
+    """1.12-A O6: a Config object must not silently fall back to the default."""
+    import yaml
+    from sklearn.preprocessing import MinMaxScaler, StandardScaler
+
+    from recsys.config import DEFAULT_CONFIG_PATH, load_config
+
+    raw = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["scaling"] = {"method": "zscore", "use_log1p": False}
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    cfg = load_config(path, data_root=tmp_path)
+
+    pipe = build_numeric_scaler(cfg)
+    assert isinstance(pipe.named_steps["scaler"], StandardScaler)
+    assert "log1p" not in pipe.named_steps
+    assert isinstance(build_numeric_scaler(None).named_steps["scaler"], MinMaxScaler)
+    with pytest.raises(TypeError, match="Config, a mapping or None"):
+        build_numeric_scaler("zscore")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="scaling block"):
+        build_numeric_scaler({"scaling": "zscore"})
+
+
+def test_notebook_08_helpers() -> None:
+    """1.12-A O4: the scaled frames and the distance sample come from src, not the notebook."""
+    from recsys.contracts import combined_distance_sample_schema, validate
+    from recsys.features.scaling import combined_distance_sample, scaled_views
+
+    df = pd.DataFrame(
+        {
+            "minutes": [10, 20, 30, np.nan, 40, 50],
+            "n_ingredients": [3, 5, 7, 2, 9, 4],
+            "calories": [100.0, 250.0, 400.0, 50.0, 800.0, 120.0],
+            "ingredients": [["a", "b"], ["a"], ["b", "c"], ["d"], ["a", "c"], ["c"]],
+        }
+    )
+    cols = ["minutes", "n_ingredients", "calories"]
+    views = scaled_views(df, cols, {"method": "zscore", "use_log1p": True})
+    assert set(views) == {"raw", "minmax", "zscore"} and len(views["raw"]) == 5  # NaN row dropped
+    assert np.isclose(views["minmax"].min().min(), 0.0)
+    assert np.isclose(views["minmax"].max().max(), 1.0)
+    assert np.allclose(views["zscore"].mean(), 0.0)
+
+    dist = combined_distance_sample(df, views["minmax"], numeric_weight=0.5, n=4)
+    validate(dist, combined_distance_sample_schema(4))
+    assert np.allclose(np.diag(dist), 0.0) and np.allclose(dist, dist.T)
+    assert list(dist.columns) == ["recipe_0", "recipe_1", "recipe_2", "recipe_3"]

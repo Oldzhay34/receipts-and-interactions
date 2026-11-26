@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+
+from recsys.contracts import NUTRITION_COLUMNS
+from recsys.data.targets import recipe_rating_stats
 
 
 @dataclass(frozen=True)
@@ -109,3 +113,69 @@ def distribution_summary_table(df: pd.DataFrame, cols: list[str]) -> pd.DataFram
     """Build a summary DataFrame classifying all requested numeric columns."""
     rows = [classify_distribution(df[col]).__dict__ for col in cols if col in df.columns]
     return pd.DataFrame(rows)
+
+
+# ------------------------------------------------------------------ notebook 06 / 07 helpers
+# Moved out of the notebooks (1.12-A O4: notebooks call src/recsys, they hold no logic).
+
+#: Numeric recipe features analysed in 1.6 and scaled in 1.8.
+NUMERIC_FEATURE_COLUMNS: tuple[str, ...] = (
+    "minutes",
+    "n_steps",
+    "n_ingredients",
+    *NUTRITION_COLUMNS,
+)
+
+
+def present_columns(df: pd.DataFrame, cols: Iterable[str] = NUMERIC_FEATURE_COLUMNS) -> list[str]:
+    """``cols`` that exist in ``df``, in the given order."""
+    return [c for c in cols if c in df.columns]
+
+
+def list_items(lists: pd.Series, name: str) -> pd.Series:
+    """One row per element of a list column (e.g. every ingredient of every recipe)."""
+    return lists.explode().rename(name)
+
+
+def reviews_per_entity(interactions: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Interactions per user and per recipe (``reviews_per_user``, ``reviews_per_recipe``)."""
+    user_counts = interactions.groupby("user_id").size().rename("reviews_per_user")
+    recipe_counts = interactions.groupby("recipe_id").size().rename("reviews_per_recipe")
+    return user_counts, recipe_counts
+
+
+def cold_start_summary(user_counts: pd.Series, recipe_counts: pd.Series) -> pd.DataFrame:
+    """Share of users / recipes with a single interaction, plus median and maximum counts."""
+    rows = []
+    for entity, counts in (("user", user_counts), ("recipe", recipe_counts)):
+        rows.append(
+            {
+                "entity": entity,
+                "total_unique": int(len(counts)),
+                "single_review_count": int((counts == 1).sum()),
+                "single_review_pct": round(float((counts == 1).mean() * 100), 2),
+                "median_reviews": float(counts.median()),
+                "max_reviews": int(counts.max()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def with_rating_stats(
+    recipes: pd.DataFrame, interactions: pd.DataFrame, how: str = "left"
+) -> pd.DataFrame:
+    """Recipes with exploratory ``avg_rating`` / ``n_ratings`` (ratings > 0 only).
+
+    For figures and binning comparisons only: the model targets are computed from TRAIN
+    interactions in 1.9 (:mod:`recsys.data.targets`). ``how="inner"`` keeps rated recipes only.
+    """
+    return recipes.merge(
+        recipe_rating_stats(interactions), left_on="id", right_on="recipe_id", how=how
+    )
+
+
+def rating_by_list_item(
+    df: pd.DataFrame, list_col: str = "tags", value: str = "avg_rating"
+) -> pd.DataFrame:
+    """Long table ``(item, value)``: one row per element of ``list_col`` of every rated recipe."""
+    return df[[list_col, value]].dropna().explode(list_col)

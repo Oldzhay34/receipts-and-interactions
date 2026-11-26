@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -11,10 +11,12 @@ from scipy import sparse
 from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, MultiLabelBinarizer, StandardScaler
 from sklearn.utils.validation import check_is_fitted
 
 from recsys.cleaning.outliers import Log1pTransformer
+from recsys.config import Config
+from recsys.features.distance import JaccardDistance
 from recsys.interfaces import DistanceMetric
 from recsys.registry import register
 
@@ -105,13 +107,22 @@ class ZScoreColumnScaler(_ColumnScaler):
 
 
 def _extract_scaling_cfg(cfg: Any) -> dict[str, Any]:
-    """Read scaling settings from dict or config object with safe defaults."""
-    if isinstance(cfg, Mapping):
+    """Read the ``scaling`` settings.
+
+    Accepts a :class:`recsys.config.Config` (its ``scaling`` block), a mapping that holds a
+    ``scaling`` block, a mapping that IS the block, or ``None`` (defaults: minmax + log1p).
+    Anything else raises, so a configuration is never ignored silently (1.12-A O6).
+    """
+    if cfg is None:
+        section: Any = {}
+    elif isinstance(cfg, Config):
+        section = cfg.section("scaling")
+    elif isinstance(cfg, Mapping):
         section = cfg.get("scaling", cfg)
     else:
-        section = getattr(cfg, "scaling", {}) or {}
+        raise TypeError(f"cfg must be a Config, a mapping or None, got {type(cfg).__name__}")
     if not isinstance(section, Mapping):
-        return {"method": "minmax", "use_log1p": True}
+        raise TypeError(f"the scaling block must be a mapping, got {type(section).__name__}")
     return {
         "method": str(section.get("method", "minmax")).lower(),
         "use_log1p": bool(section.get("use_log1p", True)),
@@ -121,10 +132,13 @@ def _extract_scaling_cfg(cfg: Any) -> dict[str, Any]:
 def build_numeric_scaler(cfg: Any = None) -> Pipeline:
     """Build a sklearn Pipeline: optional Log1p -> MinMaxScaler | StandardScaler.
 
+    ``cfg``: the project :class:`~recsys.config.Config`, a mapping (with or without the
+    ``scaling`` key) or ``None`` for the defaults.
+
     Note: In the production ML pipeline (1.9), this scaler is fit strictly on
     the training split and applied to validation/test splits without refitting.
     """
-    settings = _extract_scaling_cfg(cfg or {})
+    settings = _extract_scaling_cfg(cfg)
     method = settings["method"]
     use_log1p = settings["use_log1p"]
 
@@ -288,3 +302,51 @@ class WeightedCombinedDistance:
         d_num = cdist(A_num, B_num, metric="euclidean") / np.sqrt(n_features)
 
         return (1.0 - self.numeric_weight) * d_ing + self.numeric_weight * d_num
+
+
+# ------------------------------------------------------------------ notebook 08 helpers
+# Moved out of the notebook (1.12-A O4).
+
+
+def scaled_views(
+    df: pd.DataFrame, cols: Sequence[str], scaling_cfg: Mapping[str, Any]
+) -> dict[str, pd.DataFrame]:
+    """The numeric columns raw, Min-Max scaled and z-scored (log1p as in ``scaling_cfg``).
+
+    Rows with a missing or non-numeric value are dropped (``raw`` keeps the same rows). Demo
+    only: the scalers are fitted on all rows here; the 1.9 pipeline fits them on TRAIN.
+
+    Returns:
+        ``{"raw": ..., "minmax": ..., "zscore": ...}`` with the same index and columns.
+    """
+    cols = list(cols)
+    raw = df[cols].apply(pd.to_numeric, errors="coerce").dropna()
+    views = {"raw": raw}
+    for method in ("minmax", "zscore"):
+        pipe = build_numeric_scaler({**dict(scaling_cfg), "method": method})
+        views[method] = pd.DataFrame(pipe.fit_transform(raw), columns=cols, index=raw.index)
+    return views
+
+
+def combined_distance_sample(
+    recipes: pd.DataFrame,
+    scaled: pd.DataFrame,
+    numeric_cols: Sequence[str] = ("minutes", "n_ingredients", "calories"),
+    numeric_weight: float = 0.2,
+    n: int = 5,
+    ingredient_metric: DistanceMetric | None = None,
+) -> pd.DataFrame:
+    """Pairwise :class:`WeightedCombinedDistance` of the first ``n`` rows of ``scaled``.
+
+    The ingredient part is a binary matrix of those recipes' ``ingredients`` (Jaccard unless
+    ``ingredient_metric`` is given). Rows and columns are labelled ``recipe_0`` ...
+    ``recipe_{n-1}``; values are rounded to 4 decimals.
+    """
+    sample = recipes.loc[scaled.index[:n]]
+    X_ing = MultiLabelBinarizer(sparse_output=True).fit_transform(sample["ingredients"])
+    X = CombinedFeatures(X_ing, scaled.loc[sample.index, list(numeric_cols)].to_numpy())
+    metric = WeightedCombinedDistance(
+        ingredient_metric=ingredient_metric or JaccardDistance(), numeric_weight=numeric_weight
+    )
+    labels = [f"recipe_{i}" for i in range(len(sample))]
+    return pd.DataFrame(np.round(metric.pairwise(X, X), 4), index=labels, columns=labels)

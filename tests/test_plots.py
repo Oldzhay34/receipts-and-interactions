@@ -96,3 +96,47 @@ def test_distribution_summary_table() -> None:
     assert {"feature", "distribution_type", "skewness", "kurtosis", "p99_to_median_ratio"}.issubset(
         summary.columns
     )
+
+
+# ------------------------------------------------------------------ notebook 06 helpers (1.12-A O4)
+
+
+def test_notebook_06_helpers() -> None:
+    from recsys.analysis.distribution import (
+        NUMERIC_FEATURE_COLUMNS,
+        cold_start_summary,
+        list_items,
+        present_columns,
+        rating_by_list_item,
+        reviews_per_entity,
+        with_rating_stats,
+    )
+
+    recipes = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "minutes": [10, 20, 30],
+            "calories": [100.0, 200.0, 300.0],
+            "tags": [["a", "b"], ["b"], ["c"]],
+        }
+    )
+    inter = pd.DataFrame(
+        {"user_id": [7, 7, 8, 9], "recipe_id": [1, 2, 1, 1], "rating": [5, 0, 3, 4]}
+    )
+    assert present_columns(recipes) == ["minutes", "calories"]
+    assert len(NUMERIC_FEATURE_COLUMNS) == 10
+    assert list_items(recipes["tags"], "tag").tolist() == ["a", "b", "b", "c"]
+
+    users, recs = reviews_per_entity(inter)
+    cs = cold_start_summary(users, recs).set_index("entity")
+    assert (
+        cs.loc["user", "single_review_count"] == 2 and cs.loc["user", "single_review_pct"] == 66.67
+    )
+    assert cs.loc["recipe", "max_reviews"] == 3
+
+    viz = with_rating_stats(recipes, inter)
+    assert viz["avg_rating"].tolist()[0] == 4.0  # rating 0 ignored
+    assert pd.isna(viz.loc[viz["id"] == 2, "avg_rating"]).all()  # only a 0 rating
+    assert len(with_rating_stats(recipes, inter, how="inner")) == 1
+    long = rating_by_list_item(viz)
+    assert long["tags"].tolist() == ["a", "b"] and (long["avg_rating"] == 4.0).all()
